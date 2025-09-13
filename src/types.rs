@@ -11,11 +11,21 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub think: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub model: String,
+    pub message: ChatMessage,
+    pub done: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StreamResponse {
+    pub model: String,
+    pub created_at: String,
     pub message: ChatMessage,
     pub done: bool,
 }
