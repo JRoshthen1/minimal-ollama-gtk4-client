@@ -11,8 +11,6 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     pub stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub think: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

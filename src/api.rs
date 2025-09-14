@@ -17,8 +17,7 @@ pub async fn send_chat_request_streaming(
     model: &str,
     conversation: &Arc<Mutex<Vec<ChatMessage>>>,
     token_sender: async_channel::Sender<String>,
-    thinking_enabled: bool,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
     let messages = {
         let conversation = conversation.lock().unwrap();
         conversation.iter().cloned().collect::<Vec<_>>()
@@ -28,7 +27,6 @@ pub async fn send_chat_request_streaming(
         model: model.to_string(),
         messages,
         stream: true,
-        think: if thinking_enabled { Some(true) } else { Some(false) },
     };
 
     let client = reqwest::Client::builder()
@@ -51,7 +49,7 @@ pub async fn send_chat_request_streaming(
     let mut full_response = String::new();
     let mut current_batch = String::new();
     let mut tokens_since_last_send = 0;
-    const BATCH_SIZE: usize = 20; // Reasonable batch size
+    const BATCH_SIZE: usize = 20;
     const BATCH_TIMEOUT: Duration = Duration::from_millis(100);
 
     let mut last_send = tokio::time::Instant::now();
@@ -80,19 +78,19 @@ pub async fn send_chat_request_streaming(
                         || last_send.elapsed() >= BATCH_TIMEOUT 
                         || stream_response.done;
                     
-                    if should_send && !current_batch.is_empty() {
-                        // Use non-blocking send with async-channel
-                        match token_sender.send(current_batch.clone()).await {
-                            Ok(_) => {
-                                current_batch.clear();
-                                tokens_since_last_send = 0;
-                                last_send = tokio::time::Instant::now();
-                            }
-                            Err(_) => {
-                                // Channel closed, stop sending but continue processing
-                                break;
+                    if should_send {
+                        // Send content batch
+                        if !current_batch.is_empty() {
+                            match token_sender.send(current_batch.clone()).await {
+                                Ok(_) => {
+                                    current_batch.clear();
+                                    tokens_since_last_send = 0;
+                                }
+                                Err(_) => break,
                             }
                         }
+
+                        last_send = tokio::time::Instant::now();
                     }
                     
                     if stream_response.done {
@@ -108,17 +106,17 @@ pub async fn send_chat_request_streaming(
         }
     }
     
-    // Send any remaining tokens in the batch
+    // Send any remaining tokens in the batches
     if !current_batch.is_empty() {
         let _ = token_sender.send(current_batch).await;
     }
 
-    // async_channel automatically closes when sender is dropped
+    // Close channels
     drop(token_sender);
 
     if full_response.is_empty() {
         return Err("No response received from the model".into());
     }
 
-    Ok(full_response)
+    Ok((full_response, None))
 }
