@@ -1,5 +1,5 @@
 [package]
-name = "ollama-chat"
+name = "ollama-chat-gtk4"
 version = "0.1.0"
 edition = "2021"
 

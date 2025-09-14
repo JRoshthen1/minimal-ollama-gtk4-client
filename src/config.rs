@@ -124,7 +124,7 @@ impl Config {
     fn get_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
         let config_dir = dirs::config_dir()
             .ok_or("Could not determine config directory")?
-            .join("ollama-chat");
+            .join("ollama-chat-gtk4");
         
         Ok(config_dir.join("config.toml"))
     }

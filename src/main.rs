@@ -9,7 +9,7 @@ mod markdown_renderer;
 mod ui;
 mod config;
 
-const APP_ID: &str = "com.example.ollama-chat";
+const APP_ID: &str = "com.example.ollama-chat-gtk4";
 
 fn main() -> glib::ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
