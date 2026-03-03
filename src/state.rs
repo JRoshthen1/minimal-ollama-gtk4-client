@@ -107,5 +107,109 @@ impl AppState {
         self.set_generating(false);
         self.set_status("Generation stopped".to_string());
     }
-    
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state() -> AppState {
+        AppState {
+            conversation: Vec::new(),
+            ollama_url: "http://localhost:11434".into(),
+            is_generating: false,
+            button_state: ButtonState::Send,
+            current_task: None,
+            selected_model: None,
+            status_message: "Ready".into(),
+            system_prompt: None,
+            config: Config::default(),
+        }
+    }
+
+    #[test]
+    fn set_generating_true_sets_stop_state() {
+        let mut state = make_state();
+        state.set_generating(true);
+        assert!(state.is_generating);
+        assert_eq!(state.button_state, ButtonState::Stop);
+    }
+
+    #[test]
+    fn set_generating_false_sets_send_state() {
+        let mut state = make_state();
+        state.is_generating = true;
+        state.button_state = ButtonState::Stop;
+        state.set_generating(false);
+        assert!(!state.is_generating);
+        assert_eq!(state.button_state, ButtonState::Send);
+    }
+
+    #[test]
+    fn add_user_message_appends_with_correct_role() {
+        let mut state = make_state();
+        state.add_user_message("hello".into());
+        assert_eq!(state.conversation.len(), 1);
+        assert_eq!(state.conversation[0].role, "user");
+        assert_eq!(state.conversation[0].content, "hello");
+    }
+
+    #[test]
+    fn add_assistant_message_appends_with_correct_role() {
+        let mut state = make_state();
+        state.add_assistant_message("hi there".into());
+        assert_eq!(state.conversation.len(), 1);
+        assert_eq!(state.conversation[0].role, "assistant");
+        assert_eq!(state.conversation[0].content, "hi there");
+    }
+
+    #[test]
+    fn conversation_preserves_insertion_order() {
+        let mut state = make_state();
+        state.add_user_message("first".into());
+        state.add_assistant_message("second".into());
+        state.add_user_message("third".into());
+        assert_eq!(state.conversation.len(), 3);
+        assert_eq!(state.conversation[0].role, "user");
+        assert_eq!(state.conversation[1].role, "assistant");
+        assert_eq!(state.conversation[2].role, "user");
+    }
+
+    #[test]
+    fn set_status_updates_message() {
+        let mut state = make_state();
+        state.set_status("Loading models...".into());
+        assert_eq!(state.status_message, "Loading models...");
+    }
+
+    #[test]
+    fn abort_current_task_without_task_resets_state() {
+        let mut state = make_state();
+        state.is_generating = true;
+        state.button_state = ButtonState::Stop;
+        state.abort_current_task();
+        assert!(!state.is_generating);
+        assert_eq!(state.button_state, ButtonState::Send);
+        assert_eq!(state.status_message, "Generation stopped");
+        assert!(state.current_task.is_none());
+    }
+
+    #[tokio::test]
+    async fn abort_current_task_aborts_running_task() {
+        let mut state = make_state();
+        // Spawn a task that sleeps forever so we can verify it gets aborted
+        let handle = tokio::spawn(async {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+        });
+        state.current_task = Some(handle);
+        state.is_generating = true;
+        state.button_state = ButtonState::Stop;
+
+        state.abort_current_task();
+
+        assert!(state.current_task.is_none());
+        assert!(!state.is_generating);
+        assert_eq!(state.status_message, "Generation stopped");
+    }
 }

@@ -181,56 +181,19 @@ impl MarkdownRenderer {
         }
     }
     
-    /// Process text for streaming, handling think tags in real-time
+    /// Process text for streaming, handling think tags in real-time.
+    ///
+    /// Delegates detection to [`parse_think_segments`] and handles GTK insertions per segment.
     fn process_streaming_text(&mut self, buffer: &TextBuffer, text: &str, iter: &mut TextIter) -> String {
         let mut result = String::new();
-        let mut remaining = text;
-        
-        while !remaining.is_empty() {
-            if self.in_think_tag {
-                // We're currently inside a think tag, look for closing tag
-                if let Some(end_pos) = remaining.find("</think>") {
-                    // Found closing tag - stream the remaining think content
-                    let final_think_content = &remaining[..end_pos];
-                    if !final_think_content.is_empty() {
-                        buffer.insert_with_tags(iter, final_think_content, &[&self.think_tag]);
-                    }
-                    
-                    // Close the think section
-                    buffer.insert(iter, "\n\n");
-                    
-                    // Reset think state
-                    self.in_think_tag = false;
-                    
-                    // Continue with text after closing tag
-                    remaining = &remaining[end_pos + 8..]; // 8 = "</think>".len()
-                } else {
-                    // No closing tag yet, stream the think content as it arrives
-                    if !remaining.is_empty() {
-                        buffer.insert_with_tags(iter, remaining, &[&self.think_tag]);
-                    }
-                    break; // Wait for more streaming content
-                }
-            } else {
-                // Not in think tag, look for opening tag
-                if let Some(start_pos) = remaining.find("<think>") {
-                    // Add content before think tag to result for normal processing
-                    result.push_str(&remaining[..start_pos]);
-                    
-                    // Start think mode and show the think indicator
-                    self.in_think_tag = true;
-                    buffer.insert(iter, "\n💭 ");
-                    
-                    // Continue with content after opening tag
-                    remaining = &remaining[start_pos + 7..]; // 7 = "<think>".len()
-                } else {
-                    // No think tag found, add all remaining text to result
-                    result.push_str(remaining);
-                    break;
-                }
+        for segment in parse_think_segments(text, &mut self.in_think_tag) {
+            match segment {
+                StreamSegment::Normal(s) => result.push_str(&s),
+                StreamSegment::ThinkStart => buffer.insert(iter, "\n💭 "),
+                StreamSegment::Think(s) => buffer.insert_with_tags(iter, &s, &[&self.think_tag]),
+                StreamSegment::ThinkEnd => buffer.insert(iter, "\n\n"),
             }
         }
-        
         result
     }
     
@@ -382,6 +345,68 @@ impl MarkdownRenderer {
     }
 }
 
+/// A parsed segment from streaming think-tag processing.
+///
+/// Separating the pure detection logic (see [`parse_think_segments`]) from GTK mutations lets us
+/// unit-test the state machine without a live display session.
+#[derive(Debug, PartialEq)]
+enum StreamSegment {
+    /// Plain text that passes through the markdown renderer.
+    Normal(String),
+    /// The `<think>` opening boundary was seen; the GTK layer emits an indicator.
+    ThinkStart,
+    /// Content inside a think block, rendered with the think-tag style.
+    Think(String),
+    /// The `</think>` closing boundary was seen; the GTK layer emits a separator.
+    ThinkEnd,
+}
+
+/// Parse `text` into typed [`StreamSegment`]s, updating the in-flight `in_think` cursor.
+///
+/// Streaming-safe: a think block may open in one call and close in a later call.
+fn parse_think_segments(text: &str, in_think: &mut bool) -> Vec<StreamSegment> {
+    let mut segments = Vec::new();
+    let mut remaining = text;
+
+    while !remaining.is_empty() {
+        if *in_think {
+            match remaining.find("</think>") {
+                Some(end_pos) => {
+                    let content = &remaining[..end_pos];
+                    if !content.is_empty() {
+                        segments.push(StreamSegment::Think(content.to_string()));
+                    }
+                    segments.push(StreamSegment::ThinkEnd);
+                    *in_think = false;
+                    remaining = &remaining[end_pos + 8..]; // skip "</think>"
+                }
+                None => {
+                    segments.push(StreamSegment::Think(remaining.to_string()));
+                    break;
+                }
+            }
+        } else {
+            match remaining.find("<think>") {
+                Some(start_pos) => {
+                    let before = &remaining[..start_pos];
+                    if !before.is_empty() {
+                        segments.push(StreamSegment::Normal(before.to_string()));
+                    }
+                    segments.push(StreamSegment::ThinkStart);
+                    *in_think = true;
+                    remaining = &remaining[start_pos + 7..]; // skip "<think>"
+                }
+                None => {
+                    segments.push(StreamSegment::Normal(remaining.to_string()));
+                    break;
+                }
+            }
+        }
+    }
+
+    segments
+}
+
 /// Helper function to parse color strings (hex format) into RGBA
 fn parse_color(color_str: &str) -> Result<gtk4::gdk::RGBA, Box<dyn std::error::Error>> {
     let color_str = color_str.trim_start_matches('#');
@@ -395,4 +420,131 @@ fn parse_color(color_str: &str) -> Result<gtk4::gdk::RGBA, Box<dyn std::error::E
     let b = u8::from_str_radix(&color_str[4..6], 16)? as f32 / 255.0;
     
     Ok(gtk4::gdk::RGBA::new(r, g, b, 1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_color ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_color_red() {
+        let c = parse_color("#ff0000").unwrap();
+        assert!((c.red() - 1.0).abs() < 1e-4);
+        assert!((c.green() - 0.0).abs() < 1e-4);
+        assert!((c.blue() - 0.0).abs() < 1e-4);
+        assert!((c.alpha() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn parse_color_black() {
+        let c = parse_color("#000000").unwrap();
+        assert!((c.red() - 0.0).abs() < 1e-4);
+        assert!((c.green() - 0.0).abs() < 1e-4);
+        assert!((c.blue() - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn parse_color_white() {
+        let c = parse_color("#ffffff").unwrap();
+        assert!((c.red() - 1.0).abs() < 1e-4);
+        assert!((c.green() - 1.0).abs() < 1e-4);
+        assert!((c.blue() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn parse_color_short_hex_is_error() {
+        assert!(parse_color("#fff").is_err());
+    }
+
+    #[test]
+    fn parse_color_non_hex_chars_is_error() {
+        assert!(parse_color("#zzzzzz").is_err());
+    }
+
+    #[test]
+    fn parse_color_empty_is_error() {
+        assert!(parse_color("").is_err());
+    }
+
+    // ── parse_think_segments ─────────────────────────────────────────────────
+
+    #[test]
+    fn plain_text_produces_single_normal_segment() {
+        let mut in_think = false;
+        let segs = parse_think_segments("hello world", &mut in_think);
+        assert_eq!(segs, vec![StreamSegment::Normal("hello world".into())]);
+        assert!(!in_think);
+    }
+
+    #[test]
+    fn think_block_in_middle_produces_all_segments() {
+        let mut in_think = false;
+        let segs = parse_think_segments("before <think>thinking</think> after", &mut in_think);
+        assert_eq!(segs, vec![
+            StreamSegment::Normal("before ".into()),
+            StreamSegment::ThinkStart,
+            StreamSegment::Think("thinking".into()),
+            StreamSegment::ThinkEnd,
+            StreamSegment::Normal(" after".into()),
+        ]);
+        assert!(!in_think);
+    }
+
+    #[test]
+    fn unclosed_think_tag_leaves_in_think_true() {
+        let mut in_think = false;
+        let segs = parse_think_segments("start <think>partial", &mut in_think);
+        assert_eq!(segs, vec![
+            StreamSegment::Normal("start ".into()),
+            StreamSegment::ThinkStart,
+            StreamSegment::Think("partial".into()),
+        ]);
+        assert!(in_think);
+    }
+
+    #[test]
+    fn closing_tag_in_second_call_closes_correctly() {
+        let mut in_think = true; // simulate carrying over from previous call
+        let segs = parse_think_segments("rest</think> normal", &mut in_think);
+        assert_eq!(segs, vec![
+            StreamSegment::Think("rest".into()),
+            StreamSegment::ThinkEnd,
+            StreamSegment::Normal(" normal".into()),
+        ]);
+        assert!(!in_think);
+    }
+
+    #[test]
+    fn continuation_while_in_think_produces_think_segment() {
+        let mut in_think = true;
+        let segs = parse_think_segments("more thinking...", &mut in_think);
+        assert_eq!(segs, vec![StreamSegment::Think("more thinking...".into())]);
+        assert!(in_think);
+    }
+
+    #[test]
+    fn empty_think_block_produces_start_and_end_only() {
+        let mut in_think = false;
+        let segs = parse_think_segments("<think></think>", &mut in_think);
+        assert_eq!(segs, vec![
+            StreamSegment::ThinkStart,
+            StreamSegment::ThinkEnd,
+        ]);
+        assert!(!in_think);
+    }
+
+    #[test]
+    fn think_block_at_very_start() {
+        let mut in_think = false;
+        let segs = parse_think_segments("<think>reasoning</think>answer", &mut in_think);
+        assert_eq!(segs, vec![
+            StreamSegment::ThinkStart,
+            StreamSegment::Think("reasoning".into()),
+            StreamSegment::ThinkEnd,
+            StreamSegment::Normal("answer".into()),
+        ]);
+        assert!(!in_think);
+    }
 }

@@ -243,7 +243,6 @@ fn setup_streaming_handlers(
             accumulated_content.push_str(&content_batch);
             let config = shared_state_streaming.borrow().config.clone();
             chat_view_content.update_streaming_markdown(&response_mark_clone, &accumulated_content, &config);
-            chat_view_content.scroll_to_bottom();
         }
     });
     
