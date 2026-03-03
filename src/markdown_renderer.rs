@@ -25,7 +25,6 @@ pub struct MarkdownRenderer {
     tags_setup: bool,
     // State for streaming think tag processing
     in_think_tag: bool,
-    think_buffer: String,
 }
 
 impl MarkdownRenderer {
@@ -47,7 +46,6 @@ impl MarkdownRenderer {
             format_stack: Vec::new(),
             tags_setup: false,
             in_think_tag: false,
-            think_buffer: String::new(),
         }
     }
     
@@ -203,7 +201,6 @@ impl MarkdownRenderer {
                     
                     // Reset think state
                     self.in_think_tag = false;
-                    self.think_buffer.clear();
                     
                     // Continue with text after closing tag
                     remaining = &remaining[end_pos + 8..]; // 8 = "</think>".len()
@@ -222,7 +219,6 @@ impl MarkdownRenderer {
                     
                     // Start think mode and show the think indicator
                     self.in_think_tag = true;
-                    self.think_buffer.clear();
                     buffer.insert(iter, "\n💭 ");
                     
                     // Continue with content after opening tag

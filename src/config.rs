@@ -7,6 +7,7 @@ pub struct Config {
     pub ui: UiConfig,
     pub colors: ColorConfig,
     pub ollama: OllamaConfig,
+    pub streaming: StreamingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +40,20 @@ pub struct ColorConfig {
 pub struct OllamaConfig {
     pub url: String,
     pub timeout_seconds: u64,
+    /// Maximum number of conversation turns sent to the model (most recent N messages).
+    /// Keeps context within the model's limit. Set higher for longer memory.
+    pub max_context_messages: usize,
+    /// Optional system prompt prepended to every conversation.
+    /// Leave empty ("") to disable. RAG can override this at runtime via AppState.
+    pub system_prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingConfig {
+    /// Number of tokens to accumulate before flushing to the UI.
+    pub batch_size: usize,
+    /// Maximum milliseconds to wait before flushing a partial batch.
+    pub batch_timeout_ms: u64,
 }
 
 impl Default for Config {
@@ -47,6 +62,7 @@ impl Default for Config {
             ui: UiConfig::default(),
             colors: ColorConfig::default(),
             ollama: OllamaConfig::default(),
+            streaming: StreamingConfig::default(),
         }
     }
 }
@@ -88,6 +104,17 @@ impl Default for OllamaConfig {
         Self {
             url: "http://localhost:11434".to_string(),
             timeout_seconds: 120,
+            max_context_messages: 20,
+            system_prompt: String::new(),
+        }
+    }
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: 20,
+            batch_timeout_ms: 100,
         }
     }
 }

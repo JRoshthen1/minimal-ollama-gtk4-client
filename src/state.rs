@@ -6,28 +6,22 @@ use crate::config::Config;
 
 pub type SharedState = Rc<RefCell<AppState>>;
 
-#[derive(Debug)]
+/// Application-level errors. Uses `thiserror` so each variant gets a clear, typed
+/// message without boilerplate. Callers can match on the variant to handle errors
+/// differently (e.g. show a dialog for Config vs. a status-bar message for Api).
+#[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("API error: {0}")]
     Api(String),
+    #[error("UI error: {0}")]
     Ui(String),
+    #[error("State error: {0}")]
     State(String),
+    #[error("Validation error: {0}")]
     Validation(String),
+    #[error("Config error: {0}")]
     Config(String),
 }
-
-impl std::fmt::Display for AppError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AppError::Api(msg) => write!(f, "API Error: {}", msg),
-            AppError::Ui(msg) => write!(f, "UI Error: {}", msg),
-            AppError::State(msg) => write!(f, "State Error: {}", msg),
-            AppError::Validation(msg) => write!(f, "Validation Error: {}", msg),
-            AppError::Config(msg) => write!(f, "Config Error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for AppError {}
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -45,6 +39,9 @@ pub struct AppState {
     pub current_task: Option<JoinHandle<()>>,
     pub selected_model: Option<String>,
     pub status_message: String,
+    /// System prompt prepended to every request. Initialized from config but can be
+    /// overridden at runtime (e.g. by a RAG pipeline to inject retrieved context).
+    pub system_prompt: Option<String>,
     pub config: Config,
 }
 
@@ -54,7 +51,13 @@ impl Default for AppState {
             eprintln!("Warning: Failed to load config, using defaults: {}", e);
             Config::default()
         });
-        
+
+        let system_prompt = if config.ollama.system_prompt.is_empty() {
+            None
+        } else {
+            Some(config.ollama.system_prompt.clone())
+        };
+
         Self {
             conversation: Vec::new(),
             ollama_url: config.ollama.url.clone(),
@@ -63,6 +66,7 @@ impl Default for AppState {
             current_task: None,
             selected_model: None,
             status_message: "Ready".to_string(),
+            system_prompt,
             config,
         }
     }

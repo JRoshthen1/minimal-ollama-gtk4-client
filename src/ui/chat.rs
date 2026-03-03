@@ -76,16 +76,17 @@ impl ChatView {
         }
         
         // Add sender label with bold formatting
-        let sender_tag = gtk4::TextTag::new(Some("sender"));
-        sender_tag.set_weight(700);
-        sender_tag.set_property("pixels-below-lines", 4);
-        
-        // Add the sender tag to the buffer's tag table if it's not already there
         let tag_table = self.text_buffer.tag_table();
-        if tag_table.lookup("sender").is_none() {
-            tag_table.add(&sender_tag);
-        }
-        
+        let sender_tag = if let Some(existing) = tag_table.lookup("sender") {
+            existing
+        } else {
+            let tag = gtk4::TextTag::new(Some("sender"));
+            tag.set_weight(700);
+            tag.set_property("pixels-below-lines", 4);
+            tag_table.add(&tag);
+            tag
+        };
+
         self.text_buffer.insert_with_tags(&mut end_iter, &format!("{}:\n", sender), &[&sender_tag]);
         end_iter = self.text_buffer.end_iter();
         
@@ -132,10 +133,7 @@ impl ChatView {
         
         // Delete existing content from mark to end
         self.text_buffer.delete(&mut start_iter, &mut end_iter);
-        
-        // Get a fresh iterator at the mark position after deletion
-        let _insert_iter = self.text_buffer.iter_at_mark(mark);
-        
+
         // Render markdown directly to the main buffer
         // We use a separate method to avoid conflicts with the borrow checker
         self.render_markdown_at_mark(mark, accumulated_content, config);

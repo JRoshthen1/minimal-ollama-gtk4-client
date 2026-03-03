@@ -61,6 +61,10 @@ stop_button = "#dc3545"
 [ollama]
 url = "http://localhost:11434"
 timeout_seconds = 120
+
+[streaming]
+batch_size = 20
+batch_timeout_ms = 100
 ```
 
 ## Building

@@ -1,13 +1,29 @@
-use std::sync::{Arc, Mutex};
 use futures_util::StreamExt;
 use tokio::time::{timeout, Duration};
 use crate::types::{ChatMessage, ChatRequest, ModelInfo, ModelsResponse, StreamResponse};
 
-pub async fn fetch_models(base_url: &str) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error + Send + Sync>> {
+/// Typed errors for the Ollama API layer. Using `thiserror` means callers can match
+/// on exactly what went wrong instead of downcasting a `Box<dyn Error>`.
+#[derive(Debug, thiserror::Error)]
+pub enum ApiError {
+    #[error("HTTP request failed: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("Request timed out")]
+    Timeout,
+    #[error("Server returned error status {0}")]
+    BadStatus(u16),
+    #[error("Failed to parse response: {0}")]
+    Parse(#[from] serde_json::Error),
+    #[error("Model returned empty response")]
+    EmptyResponse,
+}
+
+pub async fn fetch_models(base_url: &str) -> Result<Vec<ModelInfo>, ApiError> {
     let url = format!("{}/api/tags", base_url);
-    
-    // Add timeout to prevent hanging
-    let response = timeout(Duration::from_secs(10), reqwest::get(&url)).await??;
+
+    let response = timeout(Duration::from_secs(10), reqwest::get(&url))
+        .await
+        .map_err(|_| ApiError::Timeout)??;
     let models_response: ModelsResponse = response.json().await?;
     Ok(models_response.models)
 }
@@ -15,13 +31,11 @@ pub async fn fetch_models(base_url: &str) -> Result<Vec<ModelInfo>, Box<dyn std:
 pub async fn send_chat_request_streaming(
     base_url: &str,
     model: &str,
-    conversation: &Arc<Mutex<Vec<ChatMessage>>>,
+    messages: Vec<ChatMessage>,
     token_sender: async_channel::Sender<String>,
-) -> Result<(String, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
-    let messages = {
-        let conversation = conversation.lock().unwrap();
-        conversation.iter().cloned().collect::<Vec<_>>()
-    };
+    batch_size: usize,
+    batch_timeout_ms: u64,
+) -> Result<String, ApiError> {
 
     let request = ChatRequest {
         model: model.to_string(),
@@ -42,15 +56,14 @@ pub async fn send_chat_request_streaming(
         .await?;
 
     if !response.status().is_success() {
-        return Err(format!("API request failed with status: {}", response.status()).into());
+        return Err(ApiError::BadStatus(response.status().as_u16()));
     }
 
     let mut stream = response.bytes_stream();
     let mut full_response = String::new();
     let mut current_batch = String::new();
     let mut tokens_since_last_send = 0;
-    const BATCH_SIZE: usize = 20;
-    const BATCH_TIMEOUT: Duration = Duration::from_millis(100);
+    let batch_timeout = Duration::from_millis(batch_timeout_ms);
 
     let mut last_send = tokio::time::Instant::now();
 
@@ -74,8 +87,8 @@ pub async fn send_chat_request_streaming(
                     }
                     
                     // Send batch if conditions are met
-                    let should_send = tokens_since_last_send >= BATCH_SIZE 
-                        || last_send.elapsed() >= BATCH_TIMEOUT 
+                    let should_send = tokens_since_last_send >= batch_size
+                        || last_send.elapsed() >= batch_timeout
                         || stream_response.done;
                     
                     if should_send {
@@ -115,8 +128,8 @@ pub async fn send_chat_request_streaming(
     drop(token_sender);
 
     if full_response.is_empty() {
-        return Err("No response received from the model".into());
+        return Err(ApiError::EmptyResponse);
     }
 
-    Ok((full_response, None))
+    Ok(full_response)
 }

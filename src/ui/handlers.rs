@@ -113,26 +113,15 @@ fn handle_stop_click(
 }
 
 fn set_generating_state(
-    shared_state: &SharedState, 
-    controls: &ControlsArea, 
-    button: &gtk4::Button, 
-    generating: bool
+    shared_state: &SharedState,
+    controls: &ControlsArea,
+    button: &gtk4::Button,
+    generating: bool,
 ) {
-    {
-        let mut state = shared_state.borrow_mut();
-        state.set_generating(generating);
-        state.set_status(if generating { 
-            "Assistant is typing...".to_string() 
-        } else { 
-            "Ready".to_string() 
-        });
-    }
+    let status = if generating { "Assistant is typing..." } else { "Ready" };
+    shared_state.borrow_mut().set_generating(generating);
     update_button_state(shared_state, button);
-    controls.set_status(if generating { 
-        "Assistant is typing..." 
-    } else { 
-        "Ready" 
-    });
+    controls.set_status(status);
 }
 
 fn update_button_state(shared_state: &SharedState, button: &gtk4::Button) {
@@ -177,12 +166,23 @@ fn start_streaming_task(
     model: String,
 ) {
     let (content_sender, content_receiver) = async_channel::bounded::<String>(100);
-    let (result_sender, result_receiver) = async_channel::bounded(1);
+    let (result_sender, result_receiver) = async_channel::bounded::<Result<String, crate::api::ApiError>>(1);
     
-    // Extract data from shared state for API call
-    let (conversation, ollama_url) = {
+    // Extract data from shared state for API call.
+    // Only send the most recent `max_context_messages` turns to stay within the model's
+    // context window. Prepend the system prompt (if set) as the first message.
+    let (messages, ollama_url, batch_size, batch_timeout_ms) = {
         let state = shared_state.borrow();
-        (state.conversation.clone(), state.ollama_url.clone())
+        let max = state.config.ollama.max_context_messages;
+        let skip = state.conversation.len().saturating_sub(max);
+        let mut msgs: Vec<_> = state.conversation[skip..].to_vec();
+        if let Some(ref prompt) = state.system_prompt {
+            msgs.insert(0, crate::types::ChatMessage {
+                role: "system".to_string(),
+                content: prompt.clone(),
+            });
+        }
+        (msgs, state.ollama_url.clone(), state.config.streaming.batch_size, state.config.streaming.batch_timeout_ms)
     };
     
     // Spawn API task
@@ -190,8 +190,10 @@ fn start_streaming_task(
         let result = api::send_chat_request_streaming(
             &ollama_url,
             &model,
-            &std::sync::Arc::new(std::sync::Mutex::new(conversation)),
+            messages,
             content_sender,
+            batch_size,
+            batch_timeout_ms,
         ).await;
         let _ = result_sender.send(result).await;
     });
@@ -216,7 +218,7 @@ fn setup_streaming_handlers(
     controls: &ControlsArea,
     button: &gtk4::Button,
     content_receiver: async_channel::Receiver<String>,
-    result_receiver: async_channel::Receiver<Result<(String, Option<String>), Box<dyn std::error::Error + Send + Sync>>>,
+    result_receiver: async_channel::Receiver<Result<String, crate::api::ApiError>>,
 ) {
     // Setup UI structure for streaming
     let mut end_iter = chat_view.buffer().end_iter();
@@ -258,10 +260,10 @@ fn setup_streaming_handlers(
                 Ok(response_text) => {
                     // Apply final markdown formatting
                     let config = shared_state_final.borrow().config.clone();
-                    chat_view_final.insert_formatted_at_mark(&response_mark, &response_text.0, &config);
-                    
+                    chat_view_final.insert_formatted_at_mark(&response_mark, &response_text, &config);
+
                     // Update conversation state
-                    shared_state_final.borrow_mut().add_assistant_message(response_text.0);
+                    shared_state_final.borrow_mut().add_assistant_message(response_text);
                     set_generating_state(&shared_state_final, &controls_final, &button_final, false);
                 }
                 Err(e) => {
