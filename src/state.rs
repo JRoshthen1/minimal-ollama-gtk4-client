@@ -2,7 +2,8 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use tokio::task::JoinHandle;
 use crate::types::ChatMessage;
-use crate::config::Config;
+use crate::config::{Config, Profile};
+use crate::db::Database;
 
 pub type SharedState = Rc<RefCell<AppState>>;
 
@@ -43,6 +44,10 @@ pub struct AppState {
     /// overridden at runtime (e.g. by a RAG pipeline to inject retrieved context).
     pub system_prompt: Option<String>,
     pub config: Config,
+    /// Currently active profile. `None` means use global config defaults.
+    pub active_profile: Option<Profile>,
+    /// SQLite database for profiles and future history/RAG. `None` if DB failed to open.
+    pub db: Option<Database>,
 }
 
 impl Default for AppState {
@@ -58,6 +63,14 @@ impl Default for AppState {
             Some(config.ollama.system_prompt.clone())
         };
 
+        let db: Option<Database> = match Database::open() {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!("Warning: Failed to open database, profiles unavailable: {}", e);
+                None
+            }
+        };
+
         Self {
             conversation: Vec::new(),
             ollama_url: config.ollama.url.clone(),
@@ -68,6 +81,8 @@ impl Default for AppState {
             status_message: "Ready".to_string(),
             system_prompt,
             config,
+            active_profile: None,
+            db,
         }
     }
 }
@@ -108,6 +123,23 @@ impl AppState {
         self.set_status("Generation stopped".to_string());
     }
 
+    /// Apply a profile, updating system_prompt and storing the active profile.
+    /// Pass `None` to clear the active profile and fall back to global config defaults.
+    pub fn apply_profile(&mut self, profile: Option<Profile>) {
+        self.system_prompt = match &profile {
+            Some(p) if !p.system_prompt.is_empty() => Some(p.system_prompt.clone()),
+            Some(_) => None,
+            None => {
+                if self.config.ollama.system_prompt.is_empty() {
+                    None
+                } else {
+                    Some(self.config.ollama.system_prompt.clone())
+                }
+            }
+        };
+        self.active_profile = profile;
+    }
+
 }
 
 #[cfg(test)]
@@ -125,6 +157,8 @@ mod tests {
             status_message: "Ready".into(),
             system_prompt: None,
             config: Config::default(),
+            active_profile: None,
+            db: None,
         }
     }
 

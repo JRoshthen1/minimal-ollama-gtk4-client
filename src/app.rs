@@ -19,10 +19,17 @@ pub fn build_ui(app: &Application) {
 
     // Initialize shared state (this loads config)
     let shared_state: SharedState = Rc::new(RefCell::new(AppState::default()));
-    
-    // Setup CSS with config
-    setup_css(&window, &shared_state.borrow().config);
-    
+
+    // Create a single CSS provider that persists for the app lifetime.
+    // Settings dialog re-uses this provider to hot-reload CSS on save.
+    let css_provider = gtk4::CssProvider::new();
+    apply_css(&css_provider, &shared_state.borrow().config);
+    gtk4::style_context_add_provider_for_display(
+        &gtk4::prelude::WidgetExt::display(&window),
+        &css_provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
     // Create main container with proper spacing
     let main_container = GtkBox::new(Orientation::Vertical, 12);
     main_container.set_margin_top(16);
@@ -39,20 +46,20 @@ pub fn build_ui(app: &Application) {
     // Chat view should expand to fill available space
     chat_view.widget().set_vexpand(true);
     chat_view.widget().set_hexpand(true);
-    
+
     // Input area should not expand vertically but should expand horizontally
     input_area.container.set_vexpand(false);
     input_area.container.set_hexpand(true);
-    
+
     // Controls should not expand
     controls_area.container.set_vexpand(false);
     controls_area.container.set_hexpand(true);
 
-    // Assemble main UI
+    // Assemble main UI — controls at top, chat fills middle, input at bottom
+    main_container.append(&controls_area.container);
     main_container.append(chat_view.widget());
     main_container.append(&input_area.container);
-    main_container.append(&controls_area.container);
-    
+
     window.set_child(Some(&main_container));
 
     // Setup event handlers
@@ -61,26 +68,19 @@ pub fn build_ui(app: &Application) {
         chat_view,
         input_area,
         controls_area,
+        window.clone(),
+        css_provider,
     );
 
     window.present();
 }
 
-fn setup_css(window: &ApplicationWindow, config: &Config) {
-    let css_provider = gtk4::CssProvider::new();
-    
-    // Generate CSS from config
-    let css_content = generate_css_from_config(config);
-    css_provider.load_from_string(&css_content);
-    
-    gtk4::style_context_add_provider_for_display(
-        &gtk4::prelude::WidgetExt::display(window),
-        &css_provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+/// Update an existing CSS provider from config. Call this at startup and after settings save.
+pub fn apply_css(provider: &gtk4::CssProvider, config: &Config) {
+    provider.load_from_string(&generate_css_from_config(config));
 }
 
-fn generate_css_from_config(config: &Config) -> String {
+pub fn generate_css_from_config(config: &Config) -> String {
     format!(
         r#"
         window {{
@@ -149,6 +149,18 @@ fn generate_css_from_config(config: &Config) -> String {
             font-size: 14px;
             color: #555;
         }}
+
+        .settings-text-container,
+        .settings-text-container > * {{
+            background-color: {};
+            border-radius: 6px;
+        }}
+
+        .settings-text-view {{
+            font-size: {}px;
+            padding: 6px;
+            color: {};
+        }}
         "#,
         config.ui.window_font_size,                    // window font-size
         config.colors.window_background,               // window background
@@ -164,5 +176,8 @@ fn generate_css_from_config(config: &Config) -> String {
         config.colors.send_button,                     // send button background
         config.ui.window_font_size,                    // dropdown font-size
         config.ui.window_font_size,                    // checkbutton font-size
+        config.colors.chat_background,                 // settings-text-container background
+        config.ui.input_font_size,                     // settings-text-view font-size
+        config.colors.primary_text,                    // settings-text-view color
     )
 }

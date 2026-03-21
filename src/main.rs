@@ -8,6 +8,7 @@ mod types;
 mod markdown_renderer;
 mod ui;
 mod config;
+mod db;
 
 const APP_ID: &str = "com.example.ollama-chat-gtk4";
 

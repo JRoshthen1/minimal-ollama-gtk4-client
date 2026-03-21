@@ -35,12 +35,14 @@ pub async fn send_chat_request_streaming(
     token_sender: async_channel::Sender<String>,
     batch_size: usize,
     batch_timeout_ms: u64,
+    temperature: Option<f32>,
 ) -> Result<String, ApiError> {
 
     let request = ChatRequest {
         model: model.to_string(),
         messages,
         stream: true,
+        temperature,
     };
 
     let client = reqwest::Client::builder()
@@ -210,7 +212,7 @@ mod tests {
         }];
         let (tx, rx) = async_channel::unbounded();
         let result = send_chat_request_streaming(
-            server_url, "llama3", messages, tx, batch_size, 5000,
+            server_url, "llama3", messages, tx, batch_size, 5000, None,
         )
         .await;
 

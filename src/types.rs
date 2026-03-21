@@ -13,6 +13,9 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     pub stream: bool,
+    /// Generation temperature. Omitted from JSON when `None` so Ollama uses its default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,6 +70,7 @@ mod tests {
             model: "llama3".to_string(),
             messages: vec![],
             stream: true,
+            temperature: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         // The Ollama API requires `"stream": true` in the body.

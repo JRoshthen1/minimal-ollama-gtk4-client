@@ -1,5 +1,6 @@
 use gtk4::prelude::*;
 use gtk4::glib::{spawn_future_local, clone};
+use gtk4::ApplicationWindow;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
@@ -12,16 +13,26 @@ pub fn setup_handlers(
     chat_view: ChatView,
     input_area: InputArea,
     controls_area: ControlsArea,
+    window: ApplicationWindow,
+    css_provider: gtk4::CssProvider,
 ) {
     // Load models on startup
     load_models(shared_state.clone(), &controls_area);
-    
+
+    // Load profiles on startup and populate the profile dropdown
+    load_profiles(shared_state.clone(), &controls_area);
+
     // Setup action button handler
     setup_action_button_handler(shared_state.clone(), &chat_view, &input_area, &controls_area);
-    
+
     // Setup keyboard shortcut
     setup_keyboard_shortcut(&input_area, shared_state.clone());
-    
+
+    // Setup profile dropdown handler
+    setup_profile_dropdown_handler(shared_state.clone(), &controls_area, window.clone());
+
+    // Setup settings gear button
+    setup_settings_button_handler(shared_state, &controls_area, window, css_provider);
 }
 
 fn setup_action_button_handler(
@@ -169,11 +180,22 @@ fn start_streaming_task(
     let (result_sender, result_receiver) = async_channel::bounded::<Result<String, crate::api::ApiError>>(1);
     
     // Extract data from shared state for API call.
+    // Active profile overrides streaming params and context window; falls back to global config.
     // Only send the most recent `max_context_messages` turns to stay within the model's
     // context window. Prepend the system prompt (if set) as the first message.
-    let (messages, ollama_url, batch_size, batch_timeout_ms) = {
+    let (messages, ollama_url, batch_size, batch_timeout_ms, temperature) = {
         let state = shared_state.borrow();
-        let max = state.config.ollama.max_context_messages;
+        let (max, batch_size, batch_timeout_ms, temperature) =
+            if let Some(ref p) = state.active_profile {
+                (p.max_context_messages, p.batch_size, p.batch_timeout_ms, p.temperature)
+            } else {
+                (
+                    state.config.ollama.max_context_messages,
+                    state.config.streaming.batch_size,
+                    state.config.streaming.batch_timeout_ms,
+                    None,
+                )
+            };
         let skip = state.conversation.len().saturating_sub(max);
         let mut msgs: Vec<_> = state.conversation[skip..].to_vec();
         if let Some(ref prompt) = state.system_prompt {
@@ -182,9 +204,9 @@ fn start_streaming_task(
                 content: prompt.clone(),
             });
         }
-        (msgs, state.ollama_url.clone(), state.config.streaming.batch_size, state.config.streaming.batch_timeout_ms)
+        (msgs, state.ollama_url.clone(), batch_size, batch_timeout_ms, temperature)
     };
-    
+
     // Spawn API task
     let task_handle = runtime().spawn(async move {
         let result = api::send_chat_request_streaming(
@@ -194,6 +216,7 @@ fn start_streaming_task(
             content_sender,
             batch_size,
             batch_timeout_ms,
+            temperature,
         ).await;
         let _ = result_sender.send(result).await;
     });
@@ -220,15 +243,9 @@ fn setup_streaming_handlers(
     content_receiver: async_channel::Receiver<String>,
     result_receiver: async_channel::Receiver<Result<String, crate::api::ApiError>>,
 ) {
-    // Setup UI structure for streaming
-    let mut end_iter = chat_view.buffer().end_iter();
-    chat_view.buffer().insert(&mut end_iter, "\n\nAssistant:");
-
-    
-    // Create response mark for regular content
-    let mut end_iter = chat_view.buffer().end_iter();
-    chat_view.buffer().insert(&mut end_iter, "\n");
-    let response_mark = chat_view.create_mark_at_end();
+    // Insert styled "Assistant:" header and get a mark for streaming content
+    let config = shared_state.borrow().config.clone();
+    let response_mark = chat_view.begin_assistant_response(&config);
     
     // Handle response content updates with live markdown
     let response_mark_clone = response_mark.clone();
@@ -305,6 +322,97 @@ fn setup_keyboard_shortcut(input_area: &InputArea, shared_state: SharedState) {
     ));
     
     input_area.text_view.add_controller(input_controller);
+}
+
+fn load_profiles(shared_state: SharedState, controls: &ControlsArea) {
+    let profile_names: Vec<String> = shared_state
+        .borrow()
+        .db
+        .as_ref()
+        .and_then(|db| db.get_profiles().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    controls.set_profiles(&profile_names);
+}
+
+fn setup_profile_dropdown_handler(shared_state: SharedState, controls: &ControlsArea, window: ApplicationWindow) {
+    controls.profile_dropdown.connect_selected_notify(clone!(
+        #[strong] shared_state,
+        #[strong] controls,
+        #[strong] window,
+        move |_| {
+            let selected_name = controls.get_selected_profile_name();
+
+            // Reflect active profile in the window title
+            match &selected_name {
+                Some(name) => window.set_title(Some(&format!("Ollama Chat — {}", name))),
+                None => window.set_title(Some("Ollama Chat")),
+            }
+
+            let profile = selected_name.as_ref().and_then(|name| {
+                shared_state
+                    .borrow()
+                    .db
+                    .as_ref()
+                    .and_then(|db| db.get_profiles().ok())
+                    .and_then(|profiles| profiles.into_iter().find(|p| &p.name == name))
+            });
+
+            // If the profile has a model_override, apply it to the model dropdown
+            if let Some(ref p) = profile {
+                if let Some(ref model) = p.model_override {
+                    if let Some(pos) = find_model_position(&controls, model) {
+                        controls.model_dropdown.set_selected(pos);
+                    }
+                }
+            }
+
+            shared_state.borrow_mut().apply_profile(profile);
+        }
+    ));
+}
+
+/// Find the position of a model name in the model dropdown, if present.
+fn find_model_position(controls: &ControlsArea, model_name: &str) -> Option<u32> {
+    let dropdown = &controls.model_dropdown;
+    let model_obj = dropdown.model()?;
+    let store = model_obj.downcast::<gtk4::StringList>().ok()?;
+    for i in 0..store.n_items() {
+        if store.string(i).as_deref() == Some(model_name) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn setup_settings_button_handler(
+    shared_state: SharedState,
+    controls: &ControlsArea,
+    window: ApplicationWindow,
+    css_provider: gtk4::CssProvider,
+) {
+    controls.settings_button.connect_clicked(clone!(
+        #[strong] shared_state,
+        #[strong] controls,
+        #[strong] window,
+        #[strong] css_provider,
+        move |_| {
+            let dialog = crate::ui::settings_dialog::create_settings_dialog(
+                &window,
+                shared_state.clone(),
+                css_provider.clone(),
+            );
+            // Reload profiles dropdown when the dialog is closed
+            dialog.connect_destroy(clone!(
+                #[strong] shared_state,
+                #[strong] controls,
+                move |_| load_profiles(shared_state.clone(), &controls)
+            ));
+            dialog.present();
+        }
+    ));
 }
 
 fn load_models(shared_state: SharedState, controls: &ControlsArea) {

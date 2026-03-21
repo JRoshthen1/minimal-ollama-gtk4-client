@@ -8,6 +8,48 @@ pub struct Config {
     pub colors: ColorConfig,
     pub ollama: OllamaConfig,
     pub streaming: StreamingConfig,
+    /// Speech-to-text input settings. Stub — no logic wired yet.
+    #[serde(default)]
+    pub tts_input: TtsInputConfig,
+}
+
+/// A named conversation preset. Stored in SQLite (not TOML).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Profile {
+    /// Database row id. `None` before the first save.
+    pub id: Option<i64>,
+    pub name: String,
+    pub system_prompt: String,
+    // Streaming
+    pub batch_size: usize,
+    pub batch_timeout_ms: u64,
+    pub max_context_messages: usize,
+    // Model
+    /// If set, overrides the model dropdown when this profile is active.
+    pub model_override: Option<String>,
+    /// Generation temperature. `None` = use Ollama server default.
+    pub temperature: Option<f32>,
+    // RAG stubs — reserved for future implementation
+    pub rag_enabled: bool,
+    pub rag_collection: Option<String>,
+    // TTS output stubs — reserved for future implementation
+    pub tts_enabled: bool,
+    pub tts_voice: Option<String>,
+    pub tts_speed: Option<f32>,
+}
+
+/// Global speech-to-text input settings. Stored in config.toml under [tts_input].
+/// All fields are stubs — no logic wired yet.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TtsInputConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Speech recognition engine, e.g. "whisper-cpp" or "vosk".
+    #[serde(default)]
+    pub engine: Option<String>,
+    /// BCP-47 language code, e.g. "en-US".
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +105,29 @@ impl Default for Config {
             colors: ColorConfig::default(),
             ollama: OllamaConfig::default(),
             streaming: StreamingConfig::default(),
+            tts_input: TtsInputConfig::default(),
+        }
+    }
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        let streaming = StreamingConfig::default();
+        let ollama = OllamaConfig::default();
+        Self {
+            id: None,
+            name: "Default".to_string(),
+            system_prompt: String::new(),
+            batch_size: streaming.batch_size,
+            batch_timeout_ms: streaming.batch_timeout_ms,
+            max_context_messages: ollama.max_context_messages,
+            model_override: None,
+            temperature: None,
+            rag_enabled: false,
+            rag_collection: None,
+            tts_enabled: false,
+            tts_voice: None,
+            tts_speed: None,
         }
     }
 }

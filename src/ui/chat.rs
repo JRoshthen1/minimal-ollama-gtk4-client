@@ -68,34 +68,80 @@ impl ChatView {
     
     pub fn append_message(&self, sender: &str, message: &str, config: &Config) {
         let mut end_iter = self.text_buffer.end_iter();
-        
-        // Add spacing if buffer is not empty
+
         if self.text_buffer.char_count() > 0 {
             self.text_buffer.insert(&mut end_iter, "\n\n");
             end_iter = self.text_buffer.end_iter();
         }
-        
-        // Add sender label with bold formatting
+
+        let is_user = sender == "You";
         let tag_table = self.text_buffer.tag_table();
-        let sender_tag = if let Some(existing) = tag_table.lookup("sender") {
+
+        // Sender label tag — distinct per role
+        let sender_tag_name = if is_user { "sender_user" } else { "sender_assistant" };
+        let sender_tag = if let Some(existing) = tag_table.lookup(sender_tag_name) {
             existing
         } else {
-            let tag = gtk4::TextTag::new(Some("sender"));
+            let tag = gtk4::TextTag::new(Some(sender_tag_name));
             tag.set_weight(700);
             tag.set_property("pixels-below-lines", 4);
+            if is_user {
+                tag.set_property("foreground", config.colors.link_text.as_str());
+                tag.set_property("justification", gtk4::Justification::Right);
+                tag.set_property("justification-set", true);
+            }
             tag_table.add(&tag);
             tag
         };
 
         self.text_buffer.insert_with_tags(&mut end_iter, &format!("{}:\n", sender), &[&sender_tag]);
         end_iter = self.text_buffer.end_iter();
-        
-        // Add message - format markdown for assistant, plain text for user
-        if sender == "You" {
-            self.text_buffer.insert(&mut end_iter, message);
+
+        if is_user {
+            // Right-aligned user message with a left margin to push it away from the left edge
+            let user_msg_tag = if let Some(existing) = tag_table.lookup("user_message") {
+                existing
+            } else {
+                let tag = gtk4::TextTag::new(Some("user_message"));
+                tag.set_property("justification", gtk4::Justification::Right);
+                tag.set_property("justification-set", true);
+                tag.set_property("left-margin", 80i32);
+                tag.set_property("left-margin-set", true);
+                tag_table.add(&tag);
+                tag
+            };
+            self.text_buffer.insert_with_tags(&mut end_iter, message, &[&user_msg_tag]);
         } else {
             self.insert_formatted_text(message, &mut end_iter, config);
         }
+    }
+
+    /// Insert a styled "Assistant:" header and return a mark at the end for streaming content.
+    pub fn begin_assistant_response(&self, config: &Config) -> gtk4::TextMark {
+        let tag_table = self.text_buffer.tag_table();
+        let mut end_iter = self.text_buffer.end_iter();
+
+        if self.text_buffer.char_count() > 0 {
+            self.text_buffer.insert(&mut end_iter, "\n\n");
+            end_iter = self.text_buffer.end_iter();
+        }
+
+        let sender_tag = if let Some(existing) = tag_table.lookup("sender_assistant") {
+            existing
+        } else {
+            let tag = gtk4::TextTag::new(Some("sender_assistant"));
+            tag.set_weight(700);
+            tag.set_property("pixels-below-lines", 4);
+            tag_table.add(&tag);
+            tag
+        };
+
+        // Silence unused warning — config is available for future use (e.g. per-role color)
+        let _ = config;
+
+        self.text_buffer.insert_with_tags(&mut end_iter, "Assistant:\n", &[&sender_tag]);
+        end_iter = self.text_buffer.end_iter();
+        self.text_buffer.create_mark(None, &end_iter, true)
     }
     
     pub fn insert_formatted_text(&self, markdown_text: &str, iter: &mut gtk4::TextIter, config: &Config) {
