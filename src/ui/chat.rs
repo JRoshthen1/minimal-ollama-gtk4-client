@@ -1,5 +1,6 @@
 use gtk4::prelude::*;
 use gtk4::{TextView, TextBuffer, ScrolledWindow, WrapMode, PolicyType, Box as GtkBox, Orientation};
+use gtk4::gio;
 use std::rc::Rc;
 use std::cell::RefCell;
 use crate::markdown_renderer::MarkdownRenderer;
@@ -41,7 +42,50 @@ impl ChatView {
         text_view.set_buffer(Some(&text_buffer));
         
         let markdown_renderer = Rc::new(RefCell::new(MarkdownRenderer::new()));
-        
+        markdown_renderer.borrow_mut().set_text_view(text_view.clone());
+
+        // Clickable links: open URL on click
+        let gesture = gtk4::GestureClick::new();
+        let tv_click = text_view.clone();
+        let buf_click = text_buffer.clone();
+        let renderer_click = markdown_renderer.clone();
+        gesture.connect_released(move |_, _n, x, y| {
+            let (bx, by) = tv_click.window_to_buffer_coords(gtk4::TextWindowType::Widget, x as i32, y as i32);
+            if let Some(iter) = tv_click.iter_at_location(bx, by) {
+                let offset = iter.offset();
+                let renderer = renderer_click.borrow();
+                for (sm, em, url) in &renderer.link_ranges {
+                    let start = buf_click.iter_at_mark(sm).offset();
+                    let end = buf_click.iter_at_mark(em).offset();
+                    if offset >= start && offset < end {
+                        let _ = gio::AppInfo::launch_default_for_uri(url, None::<&gio::AppLaunchContext>);
+                        break;
+                    }
+                }
+            }
+        });
+        text_view.add_controller(gesture);
+
+        // Pointer cursor when hovering over links
+        let motion = gtk4::EventControllerMotion::new();
+        let tv_motion = text_view.clone();
+        let buf_motion = text_buffer.clone();
+        let renderer_motion = markdown_renderer.clone();
+        motion.connect_motion(move |_, x, y| {
+            let (bx, by) = tv_motion.window_to_buffer_coords(gtk4::TextWindowType::Widget, x as i32, y as i32);
+            let over_link = tv_motion.iter_at_location(bx, by).map_or(false, |iter| {
+                let offset = iter.offset();
+                let renderer = renderer_motion.borrow();
+                renderer.link_ranges.iter().any(|(sm, em, _)| {
+                    let start = buf_motion.iter_at_mark(sm).offset();
+                    let end = buf_motion.iter_at_mark(em).offset();
+                    offset >= start && offset < end
+                })
+            });
+            tv_motion.set_cursor_from_name(Some(if over_link { "pointer" } else { "text" }));
+        });
+        text_view.add_controller(motion);
+
         // Add text view to container
         main_container.append(&text_view);
         main_container.set_vexpand(true);

@@ -1,6 +1,7 @@
 use gtk4::prelude::*;
-use gtk4::{TextBuffer, TextTag, TextIter};
-use pulldown_cmark::{Parser, Event, Tag, TagEnd, HeadingLevel, Options};
+use gtk4::{TextBuffer, TextTag, TextIter, TextView};
+use gtk4::glib;
+use pulldown_cmark::{Parser, Event, Tag, TagEnd, HeadingLevel, Options, Alignment};
 use crate::config::Config;
 
 pub struct MarkdownRenderer {
@@ -25,6 +26,19 @@ pub struct MarkdownRenderer {
     tags_setup: bool,
     // State for streaming think tag processing
     in_think_tag: bool,
+    // Clickable link tracking
+    pub link_ranges: Vec<(gtk4::TextMark, gtk4::TextMark, String)>,
+    pending_link: Option<(gtk4::TextMark, String)>,
+    // Text view reference for embedding table widgets
+    text_view: Option<TextView>,
+    // Table rendering state
+    in_table: bool,
+    in_table_head: bool,
+    in_table_cell: bool,
+    current_cell_text: String,
+    current_row: Vec<(String, bool)>,
+    table_data: Vec<Vec<(String, bool)>>,
+    table_alignments: Vec<Alignment>,
 }
 
 impl MarkdownRenderer {
@@ -46,7 +60,21 @@ impl MarkdownRenderer {
             format_stack: Vec::new(),
             tags_setup: false,
             in_think_tag: false,
+            link_ranges: Vec::new(),
+            pending_link: None,
+            text_view: None,
+            in_table: false,
+            in_table_head: false,
+            in_table_cell: false,
+            current_cell_text: String::new(),
+            current_row: Vec::new(),
+            table_data: Vec::new(),
+            table_alignments: Vec::new(),
         }
+    }
+
+    pub fn set_text_view(&mut self, tv: TextView) {
+        self.text_view = Some(tv);
     }
     
     pub fn setup_tags(&mut self, buffer: &TextBuffer, config: &Config) {
@@ -206,7 +234,11 @@ impl MarkdownRenderer {
                 self.handle_end_tag(buffer, iter, tag_end);
             }
             Event::Text(text) => {
-                self.insert_text(buffer, iter, &text);
+                if self.in_table_cell {
+                    self.current_cell_text.push_str(&text);
+                } else {
+                    self.insert_text(buffer, iter, &text);
+                }
             }
             Event::Code(code) => {
                 let active_tags: Vec<&TextTag> = self.format_stack.iter().collect();
@@ -274,7 +306,11 @@ impl MarkdownRenderer {
             }
             Tag::Emphasis => Some(&self.italic_tag),
             Tag::Strong => Some(&self.bold_tag),
-            Tag::Link { .. } => Some(&self.link_tag),
+            Tag::Link { dest_url, .. } => {
+                let mark = buffer.create_mark(None, iter, true); // left-gravity
+                self.pending_link = Some((mark, dest_url.to_string()));
+                Some(&self.link_tag)
+            }
             Tag::CodeBlock(_) => {
                 if iter.offset() > 0 {
                     buffer.insert(iter, "\n\n");
@@ -297,9 +333,31 @@ impl MarkdownRenderer {
                 buffer.insert(iter, "• ");
                 None
             }
+            Tag::Table(alignments) => {
+                if iter.offset() > 0 {
+                    buffer.insert(iter, "\n\n");
+                }
+                self.in_table = true;
+                self.table_data.clear();
+                self.table_alignments = alignments.to_vec();
+                None
+            }
+            Tag::TableHead => {
+                self.in_table_head = true;
+                None
+            }
+            Tag::TableRow => {
+                self.current_row.clear();
+                None
+            }
+            Tag::TableCell => {
+                self.in_table_cell = true;
+                self.current_cell_text.clear();
+                None
+            }
             _ => None,
         };
-        
+
         if let Some(tag_ref) = format_tag {
             self.format_stack.push(tag_ref.clone());
         }
@@ -316,7 +374,16 @@ impl MarkdownRenderer {
             TagEnd::Paragraph => {
                 // Paragraph end handled by next element start
             }
-            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Link => {
+            TagEnd::Emphasis | TagEnd::Strong => {
+                if !self.format_stack.is_empty() {
+                    self.format_stack.pop();
+                }
+            }
+            TagEnd::Link => {
+                if let Some((start_mark, url)) = self.pending_link.take() {
+                    let end_mark = buffer.create_mark(None, iter, true); // left-gravity: stays at end of link text
+                    self.link_ranges.push((start_mark, end_mark, url));
+                }
                 if !self.format_stack.is_empty() {
                     self.format_stack.pop();
                 }
@@ -330,10 +397,66 @@ impl MarkdownRenderer {
             TagEnd::Item => {
                 buffer.insert(iter, "\n");
             }
+            TagEnd::TableCell => {
+                self.in_table_cell = false;
+                self.current_row.push((self.current_cell_text.clone(), self.in_table_head));
+            }
+            TagEnd::TableRow => {
+                self.table_data.push(self.current_row.clone());
+                self.current_row.clear();
+            }
+            TagEnd::TableHead => {
+                self.in_table_head = false;
+            }
+            TagEnd::Table => {
+                self.in_table = false;
+                self.render_table_widget(buffer, iter);
+            }
             _ => {}
         }
     }
     
+    fn render_table_widget(&self, buffer: &TextBuffer, iter: &mut TextIter) {
+        let Some(ref tv) = self.text_view else { return };
+        if self.table_data.is_empty() { return; }
+
+        let anchor = buffer.create_child_anchor(iter);
+        buffer.insert(iter, "\n\n");
+
+        let frame = gtk4::Frame::new(None);
+        frame.add_css_class("md-table-frame");
+        let grid = gtk4::Grid::new();
+        grid.add_css_class("md-table");
+        frame.set_child(Some(&grid));
+
+        for (row_idx, row) in self.table_data.iter().enumerate() {
+            for (col_idx, (text, is_header)) in row.iter().enumerate() {
+                let label = gtk4::Label::new(None);
+                let xalign = match self.table_alignments.get(col_idx) {
+                    Some(Alignment::Right)  => 1.0f32,
+                    Some(Alignment::Center) => 0.5f32,
+                    _ => 0.0f32,
+                };
+                label.set_xalign(xalign);
+                label.set_margin_start(8);
+                label.set_margin_end(8);
+                label.set_margin_top(4);
+                label.set_margin_bottom(4);
+                label.set_wrap(true);
+                if *is_header {
+                    label.set_markup(&format!("<b>{}</b>", glib::markup_escape_text(text)));
+                    label.add_css_class("md-table-header");
+                } else {
+                    label.set_text(text);
+                    label.add_css_class("md-table-cell");
+                }
+                grid.attach(&label, col_idx as i32, row_idx as i32, 1, 1);
+            }
+        }
+
+        tv.add_child_at_anchor(&frame, &anchor);
+    }
+
     fn insert_text(&self, buffer: &TextBuffer, iter: &mut TextIter, text: &str) {
         if self.format_stack.is_empty() {
             buffer.insert(iter, text);

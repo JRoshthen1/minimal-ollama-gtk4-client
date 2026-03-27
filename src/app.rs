@@ -171,6 +171,18 @@ pub fn generate_css_from_config(config: &Config) -> String {
             padding: 6px;
             color: {};
         }}
+
+        .md-table-frame {{
+            margin: 4px 0;
+        }}
+
+        .md-table-header {{
+            border-bottom: 1px solid alpha(currentColor, 0.35);
+        }}
+
+        .md-table-cell {{
+            border-bottom: 1px solid alpha(currentColor, 0.1);
+        }}
         "#,
         config.ui.window_font_size,                    // window font-size
         config.colors.chat_background,                 // input area background
