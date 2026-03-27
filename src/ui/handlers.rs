@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use gtk4::glib::{spawn_future_local, clone};
+use gtk4::glib::{spawn_future_local, clone, timeout_add_seconds_local, ControlFlow};
 use gtk4::ApplicationWindow;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
@@ -446,7 +446,16 @@ fn load_models(shared_state: SharedState, controls: &ControlsArea) {
                     controls_clone.set_status("Ready");
                 }
                 Err(e) => {
-                    controls_clone.set_status(&format!("Error loading models: {}", e));
+                    controls_clone.set_status(&format!("Error: {}", e));
+                    // Retry every 5 s until Ollama is reachable
+                    timeout_add_seconds_local(5, clone!(
+                        #[strong] shared_state,
+                        #[strong] controls_clone,
+                        move || {
+                            load_models(shared_state.clone(), &controls_clone);
+                            ControlFlow::Break
+                        }
+                    ));
                 }
             }
         }

@@ -30,35 +30,34 @@ pub fn build_ui(app: &Application) {
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    // Create main container with proper spacing
-    let main_container = GtkBox::new(Orientation::Vertical, 12);
-    main_container.set_margin_top(16);
-    main_container.set_margin_bottom(16);
-    main_container.set_margin_start(16);
-    main_container.set_margin_end(16);
+    // Root: sidebar on left, content on right
+    let main_container = GtkBox::new(Orientation::Horizontal, 0);
 
     // Create UI components
     let chat_view = chat::create_chat_view();
     let input_area = input::create_input_area();
     let controls_area = controls::create_controls();
 
-    // Set proper expansion properties
-    // Chat view should expand to fill available space
+    // Content area (chat + input) fills the rest of the window
+    let content_container = GtkBox::new(Orientation::Vertical, 12);
+    content_container.set_vexpand(true);
+    content_container.set_hexpand(true);
+    content_container.set_margin_top(16);
+    content_container.set_margin_bottom(16);
+    content_container.set_margin_start(8);
+    content_container.set_margin_end(16);
+
     chat_view.widget().set_vexpand(true);
     chat_view.widget().set_hexpand(true);
-
-    // Input area should not expand vertically but should expand horizontally
     input_area.container.set_vexpand(false);
     input_area.container.set_hexpand(true);
 
-    // Controls should not expand
-    controls_area.container.set_vexpand(false);
-    controls_area.container.set_hexpand(true);
+    content_container.append(chat_view.widget());
+    content_container.append(&input_area.container);
 
-    // Assemble main UI — controls at top, chat fills middle, input at bottom
+    // Assemble — sidebar on left, content on right
     main_container.append(&controls_area.container);
-    main_container.append(chat_view.widget());
-    main_container.append(&input_area.container);
+    main_container.append(&content_container);
 
     window.set_child(Some(&main_container));
 
@@ -85,10 +84,9 @@ pub fn generate_css_from_config(config: &Config) -> String {
         r#"
         window {{
             font-size: {}px;
-            background-color: {};
         }}
-        
-        .input-container, .input-text, .input-text > *  {{
+
+        .input-container, .input-text, .input-text > * {{
             background-color: {};
             border-radius: 12px;
         }}
@@ -111,43 +109,55 @@ pub fn generate_css_from_config(config: &Config) -> String {
             padding: 24px;
             color: {};
         }}
-        
+
         .input-text:focus {{
             border-color: {};
             outline: none;
         }}
-        
-        button {{
-            font-size: {}px;
-            margin-left: 8px;
-            margin-right: 12px;
-            border-radius: 8px;
-            height: 100%;
-        }}
-        
+
         .stop-button {{
             background-color: {};
             color: white;
         }}
-        
+
         .send-button {{
             background-color: {};
             color: white;
         }}
-        
-        dropdown {{
-            font-size: {}px;
-            border-radius: 8px;
-            min-height: 40px;
-        }}
-        
-        checkbutton {{
-            font-size: {}px;
-        }}
-        
+
         .status-label {{
             font-size: 14px;
-            color: #555;
+            color: #4caf50;
+        }}
+
+        .status-error {{
+            color: #f44336;
+        }}
+
+        .status-busy {{
+            color: #ff9800;
+        }}
+
+        .sidebar {{
+            border-right: 1px solid alpha(currentColor, 0.12);
+            padding: 2px;
+        }}
+
+        .sidebar-icon-button,
+        .sidebar-icon-button > * {{
+            margin: 2px 0;
+            padding: 8px;
+            min-width: 36px;
+            min-height: 36px;
+            border-radius: 8px;
+        }}
+
+        .selector-list row {{
+            border-radius: 6px;
+        }}
+
+        .selector-list row:hover {{
+            background-color: alpha(currentColor, 0.07);
         }}
 
         .settings-text-container,
@@ -163,19 +173,15 @@ pub fn generate_css_from_config(config: &Config) -> String {
         }}
         "#,
         config.ui.window_font_size,                    // window font-size
-        config.colors.window_background,               // window background
-        config.colors.chat_background,                 // chat background
-        config.ui.chat_font_size,                      // chat font-size
-        config.colors.primary_text,                    // chat color
-        config.colors.chat_background,                 // input background (reuse chat)
-        config.ui.input_font_size,                     // input font-size
+        config.colors.chat_background,                 // input area background
+        config.ui.chat_font_size,                      // input font-size
         config.colors.primary_text,                    // input color
+        config.colors.chat_background,                 // chat area background
+        config.ui.input_font_size,                     // chat font-size
+        config.colors.primary_text,                    // chat color
         config.colors.link_text,                       // input focus border
-        config.ui.window_font_size,                    // button font-size
         config.colors.stop_button,                     // stop button background
         config.colors.send_button,                     // send button background
-        config.ui.window_font_size,                    // dropdown font-size
-        config.ui.window_font_size,                    // checkbutton font-size
         config.colors.chat_background,                 // settings-text-container background
         config.ui.input_font_size,                     // settings-text-view font-size
         config.colors.primary_text,                    // settings-text-view color
