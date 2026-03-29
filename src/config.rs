@@ -88,6 +88,9 @@ pub struct OllamaConfig {
     /// Optional system prompt prepended to every conversation.
     /// Leave empty ("") to disable. RAG can override this at runtime via AppState.
     pub system_prompt: String,
+    /// Whether thinking mode is enabled. Persisted so it survives restarts.
+    #[serde(default)]
+    pub thinking_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,6 +174,7 @@ impl Default for OllamaConfig {
             timeout_seconds: 120,
             max_context_messages: 20,
             system_prompt: String::new(),
+            thinking_enabled: false,
         }
     }
 }

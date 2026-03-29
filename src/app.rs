@@ -30,21 +30,21 @@ pub fn build_ui(app: &Application) {
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    // Root: sidebar on left, content on right
-    let main_container = GtkBox::new(Orientation::Horizontal, 0);
+    // Root: vertical stack — chat, input, toolbar
+    let main_container = GtkBox::new(Orientation::Vertical, 0);
 
     // Create UI components
     let chat_view = chat::create_chat_view();
     let input_area = input::create_input_area();
     let controls_area = controls::create_controls();
 
-    // Content area (chat + input) fills the rest of the window
+    // Content area: chat + input, with consistent margins on all sides
     let content_container = GtkBox::new(Orientation::Vertical, 12);
     content_container.set_vexpand(true);
     content_container.set_hexpand(true);
     content_container.set_margin_top(16);
-    content_container.set_margin_bottom(16);
-    content_container.set_margin_start(8);
+    content_container.set_margin_bottom(4);
+    content_container.set_margin_start(16);
     content_container.set_margin_end(16);
 
     chat_view.widget().set_vexpand(true);
@@ -55,9 +55,9 @@ pub fn build_ui(app: &Application) {
     content_container.append(chat_view.widget());
     content_container.append(&input_area.container);
 
-    // Assemble — sidebar on left, content on right
-    main_container.append(&controls_area.container);
+    // Assemble — content on top, toolbar at bottom spanning full width
     main_container.append(&content_container);
+    main_container.append(&controls_area.container);
 
     window.set_child(Some(&main_container));
 
@@ -138,18 +138,22 @@ pub fn generate_css_from_config(config: &Config) -> String {
             color: #ff9800;
         }}
 
-        .sidebar {{
-            border-right: 1px solid alpha(currentColor, 0.12);
-            padding: 2px;
+        .toolbar {{
+            border-top: 1px solid alpha(currentColor, 0.12);
+            padding: 2px 0;
         }}
 
-        .sidebar-icon-button,
-        .sidebar-icon-button > * {{
-            margin: 2px 0;
-            padding: 8px;
-            min-width: 36px;
-            min-height: 36px;
-            border-radius: 8px;
+        .toolbar-button,
+        .toolbar-button > * {{
+            margin: 0 1px;
+            padding: 4px 10px;
+            min-height: 32px;
+            border-radius: 6px;
+        }}
+
+        .toolbar-button.active {{
+            background-color: alpha({}, 0.15);
+            color: {};
         }}
 
         .selector-list row {{
@@ -194,6 +198,8 @@ pub fn generate_css_from_config(config: &Config) -> String {
         config.colors.link_text,                       // input focus border
         config.colors.stop_button,                     // stop button background
         config.colors.send_button,                     // send button background
+        config.colors.link_text,                       // thinking button active background
+        config.colors.link_text,                       // thinking button active icon color
         config.colors.chat_background,                 // settings-text-container background
         config.ui.input_font_size,                     // settings-text-view font-size
         config.colors.primary_text,                    // settings-text-view color

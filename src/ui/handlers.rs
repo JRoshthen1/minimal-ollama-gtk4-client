@@ -31,6 +31,9 @@ pub fn setup_handlers(
     // Setup profile dropdown handler
     setup_profile_dropdown_handler(shared_state.clone(), &controls_area, window.clone());
 
+    // Setup thinking toggle button
+    setup_thinking_button_handler(shared_state.clone(), &controls_area, chat_view.clone());
+
     // Setup settings gear button
     setup_settings_button_handler(shared_state, &controls_area, window, css_provider);
 }
@@ -183,7 +186,7 @@ fn start_streaming_task(
     // Active profile overrides streaming params and context window; falls back to global config.
     // Only send the most recent `max_context_messages` turns to stay within the model's
     // context window. Prepend the system prompt (if set) as the first message.
-    let (messages, ollama_url, batch_size, batch_timeout_ms, temperature) = {
+    let (messages, ollama_url, batch_size, batch_timeout_ms, temperature, thinking_enabled) = {
         let state = shared_state.borrow();
         let (max, batch_size, batch_timeout_ms, temperature) =
             if let Some(ref p) = state.active_profile {
@@ -202,9 +205,10 @@ fn start_streaming_task(
             msgs.insert(0, crate::types::ChatMessage {
                 role: "system".to_string(),
                 content: prompt.clone(),
+                thinking: None,
             });
         }
-        (msgs, state.ollama_url.clone(), batch_size, batch_timeout_ms, temperature)
+        (msgs, state.ollama_url.clone(), batch_size, batch_timeout_ms, temperature, state.thinking_enabled)
     };
 
     // Spawn API task
@@ -217,6 +221,7 @@ fn start_streaming_task(
             batch_size,
             batch_timeout_ms,
             temperature,
+            thinking_enabled,
         ).await;
         let _ = result_sender.send(result).await;
     });
@@ -385,6 +390,38 @@ fn find_model_position(controls: &ControlsArea, model_name: &str) -> Option<u32>
         }
     }
     None
+}
+
+fn setup_thinking_button_handler(
+    shared_state: SharedState,
+    controls: &ControlsArea,
+    chat_view: ChatView,
+) {
+    // Restore visual state from persisted config on startup
+    if shared_state.borrow().thinking_enabled {
+        controls.thinking_button.add_css_class("active");
+    }
+
+    controls.thinking_button.connect_clicked(clone!(
+        #[strong] shared_state,
+        #[strong] chat_view,
+        move |button| {
+            let (enabled, config) = {
+                let mut state = shared_state.borrow_mut();
+                state.thinking_enabled = !state.thinking_enabled;
+                state.config.ollama.thinking_enabled = state.thinking_enabled;
+                let _ = state.config.save();
+                (state.thinking_enabled, state.config.clone())
+            };
+            if enabled {
+                button.add_css_class("active");
+            } else {
+                button.remove_css_class("active");
+            }
+            let msg = if enabled { "Thinking mode enabled" } else { "Thinking mode disabled" };
+            chat_view.append_message("System", msg, &config);
+        }
+    ));
 }
 
 fn setup_settings_button_handler(

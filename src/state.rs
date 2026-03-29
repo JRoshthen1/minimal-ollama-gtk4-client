@@ -48,6 +48,8 @@ pub struct AppState {
     pub active_profile: Option<Profile>,
     /// SQLite database for profiles and future history/RAG. `None` if DB failed to open.
     pub db: Option<Database>,
+    /// Whether to send `think: true` in API requests (DeepSeek R1, Qwen 3).
+    pub thinking_enabled: bool,
 }
 
 impl Default for AppState {
@@ -80,6 +82,7 @@ impl Default for AppState {
             selected_model: None,
             status_message: "Ready".to_string(),
             system_prompt,
+            thinking_enabled: config.ollama.thinking_enabled,
             config,
             active_profile: None,
             db,
@@ -101,13 +104,15 @@ impl AppState {
         self.conversation.push(ChatMessage {
             role: "user".to_string(),
             content,
+            thinking: None,
         });
     }
 
     pub fn add_assistant_message(&mut self, content: String) {
         self.conversation.push(ChatMessage {
             role: "assistant".to_string(),
-            content
+            content,
+            thinking: None,
         });
     }
 
@@ -159,6 +164,7 @@ mod tests {
             config: Config::default(),
             active_profile: None,
             db: None,
+            thinking_enabled: false,
         }
     }
 

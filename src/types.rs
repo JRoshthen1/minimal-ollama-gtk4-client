@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Thinking content returned by Ollama when `think: true`. Only present in responses;
+    /// skipped when serializing outgoing request messages.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thinking: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,6 +20,9 @@ pub struct ChatRequest {
     /// Generation temperature. Omitted from JSON when `None` so Ollama uses its default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// Enable thinking mode (DeepSeek R1, Qwen 3). Omitted when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub think: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -47,9 +54,6 @@ pub struct ModelsResponse {
 mod tests {
     use super::*;
 
-    // `cargo test` will run these. This is the standard Rust pattern:
-    // put tests in a `#[cfg(test)]` module so they're compiled only when testing.
-
     #[test]
     fn chat_message_serializes_and_deserializes() {
         // Verify that serde roundtrips correctly — if you ever rename a field
@@ -57,6 +61,7 @@ mod tests {
         let msg = ChatMessage {
             role: "user".to_string(),
             content: "Hello, world!".to_string(),
+            thinking: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let decoded: ChatMessage = serde_json::from_str(&json).unwrap();
@@ -71,6 +76,7 @@ mod tests {
             messages: vec![],
             stream: true,
             temperature: None,
+            think: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         // The Ollama API requires `"stream": true` in the body.

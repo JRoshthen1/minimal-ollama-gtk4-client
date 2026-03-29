@@ -36,6 +36,7 @@ pub async fn send_chat_request_streaming(
     batch_size: usize,
     batch_timeout_ms: u64,
     temperature: Option<f32>,
+    think: bool,
 ) -> Result<String, ApiError> {
 
     let request = ChatRequest {
@@ -43,6 +44,7 @@ pub async fn send_chat_request_streaming(
         messages,
         stream: true,
         temperature,
+        think: Some(think),
     };
 
     let client = reqwest::Client::builder()
@@ -66,33 +68,59 @@ pub async fn send_chat_request_streaming(
     let mut current_batch = String::new();
     let mut tokens_since_last_send = 0;
     let batch_timeout = Duration::from_millis(batch_timeout_ms);
+    // Tracks whether we have opened a <think> block in the stream output
+    let mut thinking_started = false;
+    let mut thinking_ended = false;
 
     let mut last_send = tokio::time::Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
         let text = String::from_utf8_lossy(&chunk);
-        
+
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             match serde_json::from_str::<StreamResponse>(line) {
                 Ok(stream_response) => {
-                    let token = stream_response.message.content;
-                    
-                    if !token.is_empty() {
-                        full_response.push_str(&token);
-                        current_batch.push_str(&token);
+                    let thinking_token = stream_response.message.thinking.unwrap_or_default();
+                    let content_token = stream_response.message.content;
+
+                    // Thinking tokens: wrap in <think>...</think> for the markdown renderer.
+                    // They are NOT added to full_response (conversation history).
+                    if !thinking_token.is_empty() {
+                        if !thinking_started {
+                            current_batch.push_str("<think>");
+                            thinking_started = true;
+                        }
+                        current_batch.push_str(&thinking_token);
+                        // Thinking tokens don't count toward batch_size flush threshold
+                    }
+
+                    // Content tokens: close any open <think> block, then accumulate normally.
+                    if !content_token.is_empty() {
+                        if thinking_started && !thinking_ended {
+                            current_batch.push_str("</think>");
+                            thinking_ended = true;
+                        }
+                        full_response.push_str(&content_token);
+                        current_batch.push_str(&content_token);
                         tokens_since_last_send += 1;
                     }
-                    
+
+                    // Close an unclosed <think> block on done (thinking-only response)
+                    if stream_response.done && thinking_started && !thinking_ended {
+                        current_batch.push_str("</think>");
+                        thinking_ended = true;
+                    }
+
                     // Send batch if conditions are met
                     let should_send = tokens_since_last_send >= batch_size
                         || last_send.elapsed() >= batch_timeout
                         || stream_response.done;
-                    
+
                     if should_send {
                         // Send content batch
                         if !current_batch.is_empty() {
@@ -107,7 +135,7 @@ pub async fn send_chat_request_streaming(
 
                         last_send = tokio::time::Instant::now();
                     }
-                    
+
                     if stream_response.done {
                         break;
                     }
@@ -209,10 +237,11 @@ mod tests {
         let messages = vec![ChatMessage {
             role: "user".to_string(),
             content: "hi".to_string(),
+            thinking: None,
         }];
         let (tx, rx) = async_channel::unbounded();
         let result = send_chat_request_streaming(
-            server_url, "llama3", messages, tx, batch_size, 5000, None,
+            server_url, "llama3", messages, tx, batch_size, 5000, None, false,
         )
         .await;
 

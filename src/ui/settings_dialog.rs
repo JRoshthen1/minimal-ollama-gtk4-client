@@ -156,6 +156,7 @@ struct GeneralWidgets {
     // Carry-through for fields not shown in the form
     base_streaming: StreamingConfig,
     base_tts_input: TtsInputConfig,
+    base_thinking_enabled: bool,
 }
 
 fn build_general_tab(config: &Config) -> (ScrolledWindow, GeneralWidgets) {
@@ -241,6 +242,7 @@ fn build_general_tab(config: &Config) -> (ScrolledWindow, GeneralWidgets) {
         color_stop_btn: color_stop_btn.1,
         base_streaming: config.streaming.clone(),
         base_tts_input: config.tts_input.clone(),
+        base_thinking_enabled: config.ollama.thinking_enabled,
     };
 
     (scrolled, widgets)
@@ -256,6 +258,7 @@ fn read_general_tab(w: &GeneralWidgets) -> Config {
             timeout_seconds: w.ollama_timeout.value() as u64,
             max_context_messages: w.ollama_max_context.value() as usize,
             system_prompt,
+            thinking_enabled: w.base_thinking_enabled,
         },
         ui: UiConfig {
             window_font_size: w.ui_window_font.value() as u32,

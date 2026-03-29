@@ -3,6 +3,7 @@ use gtk4::glib::clone;
 use gtk4::{
     Box as GtkBox, Button, MenuButton, Orientation, DropDown, Label, StringList,
     Separator, ListBox, ListBoxRow, Popover, ScrolledWindow, PolicyType, SelectionMode,
+    Image,
 };
 
 #[derive(Clone)]
@@ -13,6 +14,7 @@ pub struct ControlsArea {
     pub profile_dropdown: DropDown,
     pub status_label: Label,
     pub settings_button: Button,
+    pub thinking_button: Button,
     models: StringList,
     profiles: StringList,
     model_button_label: Label,
@@ -23,26 +25,31 @@ pub struct ControlsArea {
 
 impl ControlsArea {
     pub fn new() -> Self {
-        let container = GtkBox::new(Orientation::Vertical, 6);
-        container.add_css_class("sidebar");
-        container.set_margin_top(12);
-        container.set_margin_bottom(12);
+        let container = GtkBox::new(Orientation::Horizontal, 2);
+        container.add_css_class("toolbar");
+        container.set_margin_top(4);
+        container.set_margin_bottom(8);
         container.set_margin_start(8);
         container.set_margin_end(8);
-        container.set_vexpand(true);
-        container.set_width_request(52);
+        container.set_hexpand(true);
 
         // --- Hidden model DropDown (state + signals only) ---
         let models = StringList::new(&[]);
         let model_dropdown = DropDown::new(Some(models.clone()), None::<gtk4::Expression>);
         model_dropdown.set_visible(false);
 
-        // --- Visible model MenuButton + Popover ---
+        // --- Model button label (shows currently selected model inline) ---
         let model_button_label = Label::new(Some("—"));
         model_button_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        model_button_label.set_max_width_chars(14);
+        model_button_label.set_max_width_chars(22);
         model_button_label.set_xalign(0.0);
-        model_button_label.set_hexpand(true);
+
+        // Model button: icon + label in an HBox
+        let model_btn_content = GtkBox::new(Orientation::Horizontal, 6);
+        model_btn_content.set_margin_start(2);
+        model_btn_content.set_margin_end(2);
+        model_btn_content.append(&Image::from_icon_name("computer-symbolic"));
+        model_btn_content.append(&model_button_label);
 
         let model_list = ListBox::new();
         model_list.set_selection_mode(SelectionMode::None);
@@ -59,10 +66,10 @@ impl ControlsArea {
         model_popover.set_child(Some(&model_scroll));
 
         let model_button = MenuButton::new();
-        model_button.set_icon_name("computer-symbolic");
+        model_button.set_child(Some(&model_btn_content));
         model_button.set_popover(Some(&model_popover));
         model_button.set_always_show_arrow(false);
-        model_button.add_css_class("sidebar-icon-button");
+        model_button.add_css_class("toolbar-button");
         model_button.set_tooltip_text(Some("Select model"));
 
         // Sync hidden dropdown selection → button label (e.g. when profile overrides model)
@@ -96,12 +103,18 @@ impl ControlsArea {
         let profile_dropdown = DropDown::new(Some(profiles.clone()), None::<gtk4::Expression>);
         profile_dropdown.set_visible(false);
 
-        // --- Visible profile MenuButton + Popover ---
+        // --- Profile button label (shows currently active profile inline) ---
         let profile_button_label = Label::new(Some("None"));
         profile_button_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        profile_button_label.set_max_width_chars(14);
+        profile_button_label.set_max_width_chars(16);
         profile_button_label.set_xalign(0.0);
-        profile_button_label.set_hexpand(true);
+
+        // Profile button: icon + label in an HBox
+        let profile_btn_content = GtkBox::new(Orientation::Horizontal, 6);
+        profile_btn_content.set_margin_start(2);
+        profile_btn_content.set_margin_end(2);
+        profile_btn_content.append(&Image::from_icon_name("avatar-default-symbolic"));
+        profile_btn_content.append(&profile_button_label);
 
         let profile_list = ListBox::new();
         profile_list.set_selection_mode(SelectionMode::None);
@@ -118,10 +131,10 @@ impl ControlsArea {
         profile_popover.set_child(Some(&profile_scroll));
 
         let profile_button = MenuButton::new();
-        profile_button.set_icon_name("avatar-default-symbolic");
+        profile_button.set_child(Some(&profile_btn_content));
         profile_button.set_popover(Some(&profile_popover));
         profile_button.set_always_show_arrow(false);
-        profile_button.add_css_class("sidebar-icon-button");
+        profile_button.add_css_class("toolbar-button");
         profile_button.set_tooltip_text(Some("Select profile"));
 
         profile_dropdown.connect_selected_notify(clone!(
@@ -148,22 +161,32 @@ impl ControlsArea {
             }
         ));
 
-        // --- Status label + Settings button ---
-        let spacer = GtkBox::new(Orientation::Vertical, 0);
-        spacer.set_vexpand(true);
+        // --- Thinking toggle ---
+        let thinking_button = Button::from_icon_name("application-x-appliance-symbolic");
+        thinking_button.set_tooltip_text(Some("Toggle thinking mode"));
+        thinking_button.add_css_class("toolbar-button");
 
-        let sep = Separator::new(Orientation::Horizontal);
-        sep.set_margin_top(4);
-        sep.set_margin_bottom(4);
+        // --- Flexible spacer pushes status + settings to the right ---
+        let spacer = GtkBox::new(Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
 
+        // --- Status indicator ---
         let status_label = Label::new(Some("●"));
         status_label.set_halign(gtk4::Align::Center);
         status_label.add_css_class("status-label");
         status_label.set_tooltip_text(Some("Ready"));
+        status_label.set_margin_start(8);
+        status_label.set_margin_end(4);
 
+        // --- Vertical separator before settings ---
+        let sep = Separator::new(Orientation::Vertical);
+        sep.set_margin_start(4);
+        sep.set_margin_end(4);
+
+        // --- Settings button ---
         let settings_button = Button::from_icon_name("preferences-system-symbolic");
         settings_button.set_tooltip_text(Some("Settings"));
-        settings_button.add_css_class("sidebar-icon-button");
+        settings_button.add_css_class("toolbar-button");
 
         // Hidden dropdowns don't need to be in the widget tree for signals to work,
         // but add them invisible so they stay alive and realized.
@@ -171,9 +194,10 @@ impl ControlsArea {
         container.append(&profile_dropdown);
         container.append(&model_button);
         container.append(&profile_button);
+        container.append(&thinking_button);
         container.append(&spacer);
-        container.append(&sep);
         container.append(&status_label);
+        container.append(&sep);
         container.append(&settings_button);
 
         Self {
@@ -182,6 +206,7 @@ impl ControlsArea {
             profile_dropdown,
             status_label,
             settings_button,
+            thinking_button,
             models,
             profiles,
             model_button_label,
