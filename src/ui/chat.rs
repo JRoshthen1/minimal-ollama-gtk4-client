@@ -193,6 +193,15 @@ impl ChatView {
         renderer.render_markdown_at_iter(&self.text_buffer, markdown_text, iter, config);
     }
     
+    /// Wipe all rendered content from the chat area (used when loading a different conversation).
+    pub fn clear(&self) {
+        self.text_buffer.delete(
+            &mut self.text_buffer.start_iter(),
+            &mut self.text_buffer.end_iter(),
+        );
+        self.markdown_renderer.borrow_mut().link_ranges.clear();
+    }
+
     pub fn scroll_to_bottom(&self) {
         let adjustment = self.scrolled_window.vadjustment();
         adjustment.set_value(adjustment.upper() - adjustment.page_size());

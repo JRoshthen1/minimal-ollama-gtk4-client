@@ -15,6 +15,7 @@ pub struct ControlsArea {
     pub status_label: Label,
     pub settings_button: Button,
     pub thinking_button: Button,
+    pub sidebar_toggle_button: Button,
     models: StringList,
     profiles: StringList,
     model_button_label: Label,
@@ -46,8 +47,7 @@ impl ControlsArea {
 
         // Model button: icon + label in an HBox
         let model_btn_content = GtkBox::new(Orientation::Horizontal, 6);
-        model_btn_content.set_margin_start(2);
-        model_btn_content.set_margin_end(2);
+
         model_btn_content.append(&Image::from_icon_name("computer-symbolic"));
         model_btn_content.append(&model_button_label);
 
@@ -104,15 +104,14 @@ impl ControlsArea {
         profile_dropdown.set_visible(false);
 
         // --- Profile button label (shows currently active profile inline) ---
-        let profile_button_label = Label::new(Some("None"));
+        let profile_button_label = Label::new(Some("Profile"));
         profile_button_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         profile_button_label.set_max_width_chars(16);
         profile_button_label.set_xalign(0.0);
 
         // Profile button: icon + label in an HBox
         let profile_btn_content = GtkBox::new(Orientation::Horizontal, 6);
-        profile_btn_content.set_margin_start(2);
-        profile_btn_content.set_margin_end(2);
+
         profile_btn_content.append(&Image::from_icon_name("avatar-default-symbolic"));
         profile_btn_content.append(&profile_button_label);
 
@@ -161,6 +160,11 @@ impl ControlsArea {
             }
         ));
 
+        // --- Sidebar toggle ---
+        let sidebar_toggle_button = Button::from_icon_name("sidebar-show-symbolic");
+        sidebar_toggle_button.set_tooltip_text(Some("Toggle sidebar"));
+        sidebar_toggle_button.add_css_class("toolbar-button");
+
         // --- Thinking toggle ---
         let thinking_button = Button::from_icon_name("application-x-appliance-symbolic");
         thinking_button.set_tooltip_text(Some("Toggle thinking mode"));
@@ -192,6 +196,7 @@ impl ControlsArea {
         // but add them invisible so they stay alive and realized.
         container.append(&model_dropdown);
         container.append(&profile_dropdown);
+        container.append(&sidebar_toggle_button);
         container.append(&model_button);
         container.append(&profile_button);
         container.append(&thinking_button);
@@ -207,6 +212,7 @@ impl ControlsArea {
             status_label,
             settings_button,
             thinking_button,
+            sidebar_toggle_button,
             models,
             profiles,
             model_button_label,

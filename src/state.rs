@@ -50,6 +50,9 @@ pub struct AppState {
     pub db: Option<Database>,
     /// Whether to send `think: true` in API requests (DeepSeek R1, Qwen 3).
     pub thinking_enabled: bool,
+    /// The currently open conversation's DB id. `None` means no conversation is active yet
+    /// (a new one will be created on the first sent message).
+    pub current_conversation_id: Option<i64>,
 }
 
 impl Default for AppState {
@@ -86,6 +89,7 @@ impl Default for AppState {
             config,
             active_profile: None,
             db,
+            current_conversation_id: None,
         }
     }
 }
@@ -128,6 +132,13 @@ impl AppState {
         self.set_status("Generation stopped".to_string());
     }
 
+    /// Clear the in-memory conversation and discard the active conversation id,
+    /// making the next sent message start a brand-new conversation in the DB.
+    pub fn clear_conversation(&mut self) {
+        self.conversation.clear();
+        self.current_conversation_id = None;
+    }
+
     /// Apply a profile, updating system_prompt and storing the active profile.
     /// Pass `None` to clear the active profile and fall back to global config defaults.
     pub fn apply_profile(&mut self, profile: Option<Profile>) {
@@ -165,6 +176,7 @@ mod tests {
             active_profile: None,
             db: None,
             thinking_enabled: false,
+            current_conversation_id: None,
         }
     }
 

@@ -178,19 +178,100 @@ impl Database {
         Ok(())
     }
 
-    // ── Stub methods — schema is ready, logic implemented when UI is built ────
+    // ── Conversation history ──────────────────────────────────────────────────
 
-    /// Create a new conversation session. TODO: implement when history UI is built.
-    #[allow(unused_variables)]
+    /// Create a new conversation session. Returns the new row id.
     pub fn create_conversation(&self, profile_id: Option<i64>) -> DbResult<i64> {
-        Ok(0)
+        self.conn.execute(
+            "INSERT INTO conversations (profile_id) VALUES (?1)",
+            params![profile_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
     }
 
-    /// Append a message to a conversation. TODO: implement when history UI is built.
-    #[allow(unused_variables)]
+    /// Append a message to a conversation and bump `updated_at` on the parent session.
     pub fn add_message(&self, conv_id: i64, role: &str, content: &str) -> DbResult<()> {
+        self.conn.execute(
+            "INSERT INTO messages (conversation_id, role, content) VALUES (?1, ?2, ?3)",
+            params![conv_id, role, content],
+        )?;
+        self.conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?1",
+            params![conv_id],
+        )?;
         Ok(())
     }
+
+    /// Set or update the display title of a conversation.
+    pub fn update_conversation_title(&self, conv_id: i64, title: &str) -> DbResult<()> {
+        self.conn.execute(
+            "UPDATE conversations SET title = ?1 WHERE id = ?2",
+            params![title, conv_id],
+        )?;
+        Ok(())
+    }
+
+    /// Return all conversations ordered by most-recently-updated first.
+    pub fn list_conversations(&self) -> DbResult<Vec<ConversationSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, COALESCE(title, 'New conversation'), updated_at
+             FROM conversations ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ConversationSummary {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    updated_at: row.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Delete a conversation and all its messages.
+    pub fn delete_conversation(&self, conv_id: i64) -> DbResult<()> {
+        self.conn.execute("DELETE FROM messages WHERE conversation_id = ?1", params![conv_id])?;
+        self.conn.execute("DELETE FROM conversations WHERE id = ?1", params![conv_id])?;
+        Ok(())
+    }
+
+    /// Delete every conversation and every message.
+    pub fn delete_all_conversations(&self) -> DbResult<()> {
+        self.conn.execute("DELETE FROM messages", [])?;
+        self.conn.execute("DELETE FROM conversations", [])?;
+        Ok(())
+    }
+
+    /// Return all messages for a conversation in chronological order.
+    pub fn get_messages(&self, conv_id: i64) -> DbResult<Vec<StoredMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT role, content FROM messages
+             WHERE conversation_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![conv_id], |row| {
+                Ok(StoredMessage {
+                    role: row.get(0)?,
+                    content: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+}
+
+// ── Value types returned by conversation queries ──────────────────────────────
+
+pub struct ConversationSummary {
+    pub id: i64,
+    pub title: String,
+    pub updated_at: String,
+}
+
+pub struct StoredMessage {
+    pub role: String,
+    pub content: String,
 }
 
 #[cfg(test)]
@@ -259,5 +340,51 @@ mod tests {
         let stored_temp = profiles[0].temperature.unwrap();
         assert!((stored_temp - 0.42_f32).abs() < 0.001, "temperature={}", stored_temp);
         assert_eq!(profiles[0].id, Some(id));
+    }
+
+    #[test]
+    fn create_conversation_returns_valid_id() {
+        let db = Database::open_in_memory().unwrap();
+        let id = db.create_conversation(None).unwrap();
+        assert!(id > 0);
+    }
+
+    #[test]
+    fn add_message_persists_and_list_retrieves() {
+        let db = Database::open_in_memory().unwrap();
+        let conv_id = db.create_conversation(None).unwrap();
+        db.add_message(conv_id, "user", "Hello").unwrap();
+        db.add_message(conv_id, "assistant", "Hi there").unwrap();
+
+        let msgs = db.get_messages(conv_id).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].content, "Hello");
+        assert_eq!(msgs[1].role, "assistant");
+        assert_eq!(msgs[1].content, "Hi there");
+    }
+
+    #[test]
+    fn list_conversations_ordered_by_updated_at() {
+        let db = Database::open_in_memory().unwrap();
+        let id1 = db.create_conversation(None).unwrap();
+        let id2 = db.create_conversation(None).unwrap();
+        // Add a message to id1, bumping its updated_at to be more recent
+        db.add_message(id1, "user", "ping").unwrap();
+
+        let list = db.list_conversations().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, id1);
+        assert_eq!(list[1].id, id2);
+    }
+
+    #[test]
+    fn update_conversation_title_sets_title() {
+        let db = Database::open_in_memory().unwrap();
+        let id = db.create_conversation(None).unwrap();
+        db.update_conversation_title(id, "My Chat").unwrap();
+
+        let list = db.list_conversations().unwrap();
+        assert_eq!(list[0].title, "My Chat");
     }
 }

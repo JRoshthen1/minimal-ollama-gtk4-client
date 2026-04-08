@@ -11,7 +11,7 @@ pub struct InputArea {
 
 impl InputArea {
     pub fn new() -> Self {
-        let container = GtkBox::new(Orientation::Horizontal, 0);
+        let container = GtkBox::new(Orientation::Horizontal, 12);
         
         // Text input area with proper sizing
         let scrolled_window = ScrolledWindow::new();
@@ -38,9 +38,9 @@ impl InputArea {
         scrolled_window.set_child(Some(&text_view));
         
         // Action button container
-        let button_container = GtkBox::new(Orientation::Horizontal, 8);
+        let button_container = GtkBox::new(Orientation::Horizontal, 0);
         button_container.set_halign(gtk4::Align::End);
-        
+
         let action_button = Button::with_label("Send");
         action_button.add_css_class("send-button");
         

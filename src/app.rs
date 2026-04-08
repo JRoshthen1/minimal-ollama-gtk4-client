@@ -1,12 +1,12 @@
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow};
+use gtk4::{Application, ApplicationWindow, Paned};
 use gtk4::Orientation;
 use gtk4::Box as GtkBox;
 use std::rc::Rc;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::state::{AppState, SharedState};
-use crate::ui::{chat, input, controls, handlers};
+use crate::ui::{chat, input, controls, handlers, sidebar};
 use crate::config::Config;
 
 pub fn build_ui(app: &Application) {
@@ -30,13 +30,14 @@ pub fn build_ui(app: &Application) {
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    // Root: vertical stack — chat, input, toolbar
+    // Root: vertical stack — [sidebar | chat+input], toolbar
     let main_container = GtkBox::new(Orientation::Vertical, 0);
 
     // Create UI components
     let chat_view = chat::create_chat_view();
     let input_area = input::create_input_area();
     let controls_area = controls::create_controls();
+    let sidebar = sidebar::create_sidebar();
 
     // Content area: chat + input, with consistent margins on all sides
     let content_container = GtkBox::new(Orientation::Vertical, 12);
@@ -55,8 +56,49 @@ pub fn build_ui(app: &Application) {
     content_container.append(chat_view.widget());
     content_container.append(&input_area.container);
 
-    // Assemble — content on top, toolbar at bottom spanning full width
-    main_container.append(&content_container);
+    // Horizontal body: sidebar (resizable) on the left, chat+input on the right
+    let body = Paned::new(Orientation::Horizontal);
+    body.set_vexpand(true);
+    body.set_start_child(Some(&sidebar.container));
+    body.set_shrink_start_child(false);  // respect sidebar min-width
+    body.set_resize_start_child(false);  // sidebar doesn't absorb window resize
+    body.set_end_child(Some(&content_container));
+    body.set_shrink_end_child(false);
+    body.set_resize_end_child(true);     // content area absorbs resize
+
+    // Sidebar starts closed
+    sidebar.container.set_visible(false);
+    body.set_position(0);
+
+    // Shared state for toggle
+    let sidebar_open = Rc::new(Cell::new(false));
+    let last_sidebar_width = Rc::new(Cell::new(220_i32));
+
+    controls_area.sidebar_toggle_button.connect_clicked({
+        let sidebar_container = sidebar.container.clone();
+        let body = body.clone();
+        let sidebar_open = sidebar_open.clone();
+        let last_sidebar_width = last_sidebar_width.clone();
+        let toggle_button = controls_area.sidebar_toggle_button.clone();
+        move |_| {
+            if sidebar_open.get() {
+                let pos = body.position();
+                if pos > 0 { last_sidebar_width.set(pos); }
+                sidebar_container.set_visible(false);
+                body.set_position(0);
+                toggle_button.remove_css_class("active");
+                sidebar_open.set(false);
+            } else {
+                sidebar_container.set_visible(true);
+                body.set_position(last_sidebar_width.get());
+                toggle_button.add_css_class("active");
+                sidebar_open.set(true);
+            }
+        }
+    });
+
+    // Assemble — body on top, toolbar at bottom spanning full width
+    main_container.append(&body);
     main_container.append(&controls_area.container);
 
     window.set_child(Some(&main_container));
@@ -67,6 +109,7 @@ pub fn build_ui(app: &Application) {
         chat_view,
         input_area,
         controls_area,
+        sidebar,
         window.clone(),
         css_provider,
     );
@@ -143,14 +186,6 @@ pub fn generate_css_from_config(config: &Config) -> String {
             padding: 2px 0;
         }}
 
-        .toolbar-button,
-        .toolbar-button > * {{
-            margin: 0 1px;
-            padding: 4px 10px;
-            min-height: 32px;
-            border-radius: 6px;
-        }}
-
         .toolbar-button.active {{
             background-color: alpha({}, 0.15);
             color: {};
@@ -187,6 +222,59 @@ pub fn generate_css_from_config(config: &Config) -> String {
         .md-table-cell {{
             border-bottom: 1px solid alpha(currentColor, 0.1);
         }}
+
+        .sidebar {{
+            background-color: alpha(currentColor, 0.03);
+            border-right: 1px solid alpha(currentColor, 0.10);
+        }}
+
+        paned > separator {{
+            min-width: 1px;
+            background-color: alpha(currentColor, 0.10);
+        }}
+
+        paned > separator:hover {{
+            min-width: 3px;
+            background-color: alpha(currentColor, 0.25);
+        }}
+
+        .sidebar-list row {{
+            border-radius: 6px;
+            margin: 1px 4px;
+        }}
+
+        .sidebar-list row:hover {{
+            background-color: alpha(currentColor, 0.07);
+        }}
+
+        .sidebar-list row:selected {{
+            background-color: alpha({}, 0.15);
+        }}
+
+        .dim-label {{
+            font-size: 11px;
+            opacity: 0.55;
+        }}
+
+        .sidebar-delete-button,
+        .sidebar-delete-button > * {{
+            padding: 2px 6px;
+            min-height: 0;
+            min-width: 0;
+            border-radius: 4px;
+            opacity: 0.4;
+            font-size: 14px;
+        }}
+
+        .sidebar-delete-button:hover {{
+            opacity: 1;
+            background-color: alpha(#f44336, 0.15);
+            color: #f44336;
+        }}
+
+        .destructive-button {{
+            color: #f44336;
+        }}
         "#,
         config.ui.window_font_size,                    // window font-size
         config.colors.chat_background,                 // input area background
@@ -203,5 +291,6 @@ pub fn generate_css_from_config(config: &Config) -> String {
         config.colors.chat_background,                 // settings-text-container background
         config.ui.input_font_size,                     // settings-text-view font-size
         config.colors.primary_text,                    // settings-text-view color
+        config.colors.link_text,                       // sidebar selected row background
     )
 }

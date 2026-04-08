@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 use crate::state::{SharedState, AppResult, AppError, ButtonState};
-use crate::ui::{chat::ChatView, input::InputArea, controls::ControlsArea};
+use crate::ui::{chat::ChatView, input::InputArea, controls::ControlsArea, sidebar::ConversationSidebar};
 use crate::api;
 
 pub fn setup_handlers(
@@ -13,6 +13,7 @@ pub fn setup_handlers(
     chat_view: ChatView,
     input_area: InputArea,
     controls_area: ControlsArea,
+    sidebar: ConversationSidebar,
     window: ApplicationWindow,
     css_provider: gtk4::CssProvider,
 ) {
@@ -22,8 +23,11 @@ pub fn setup_handlers(
     // Load profiles on startup and populate the profile dropdown
     load_profiles(shared_state.clone(), &controls_area);
 
+    // Load conversation history into the sidebar
+    load_sidebar(shared_state.clone(), &sidebar);
+
     // Setup action button handler
-    setup_action_button_handler(shared_state.clone(), &chat_view, &input_area, &controls_area);
+    setup_action_button_handler(shared_state.clone(), &chat_view, &input_area, &controls_area, &sidebar);
 
     // Setup keyboard shortcut
     setup_keyboard_shortcut(&input_area, shared_state.clone());
@@ -35,7 +39,10 @@ pub fn setup_handlers(
     setup_thinking_button_handler(shared_state.clone(), &controls_area, chat_view.clone());
 
     // Setup settings gear button
-    setup_settings_button_handler(shared_state, &controls_area, window, css_provider);
+    setup_settings_button_handler(shared_state.clone(), &controls_area, window, css_provider);
+
+    // Setup sidebar handlers (new chat + conversation selection)
+    setup_sidebar_handlers(shared_state, &chat_view, &controls_area, &sidebar);
 }
 
 fn setup_action_button_handler(
@@ -43,33 +50,37 @@ fn setup_action_button_handler(
     chat_view: &ChatView,
     input_area: &InputArea,
     controls_area: &ControlsArea,
+    sidebar: &ConversationSidebar,
 ) {
     let action_button = &input_area.action_button;
     let text_buffer = input_area.text_buffer.clone();
     let chat_view_clone = chat_view.clone();
     let controls_clone = controls_area.clone();
     let button_clone = action_button.clone();
-    
+    let sidebar_clone = sidebar.clone();
+
     action_button.connect_clicked(clone!(
         #[strong] shared_state,
         #[strong] text_buffer,
         #[strong] chat_view_clone,
         #[strong] controls_clone,
         #[strong] button_clone,
+        #[strong] sidebar_clone,
         move |_| {
             if let Err(e) = handle_action_button_click(
                 &shared_state,
                 &text_buffer,
                 &chat_view_clone,
                 &controls_clone,
-                &button_clone
+                &button_clone,
+                &sidebar_clone,
             ) {
                 controls_clone.set_status(&format!("Error: {}", e));
                 update_button_state(&shared_state, &button_clone);
             }
         }
     ));
-    
+
     // Initialize button appearance
     update_button_state(&shared_state, action_button);
 }
@@ -80,11 +91,12 @@ fn handle_action_button_click(
     chat_view: &ChatView,
     controls: &ControlsArea,
     button: &gtk4::Button,
+    sidebar: &ConversationSidebar,
 ) -> AppResult<()> {
     let current_state = shared_state.borrow().button_state;
-    
+
     match current_state {
-        ButtonState::Send => handle_send_click(shared_state, text_buffer, chat_view, controls, button),
+        ButtonState::Send => handle_send_click(shared_state, text_buffer, chat_view, controls, button, sidebar),
         ButtonState::Stop => handle_stop_click(shared_state, controls, button),
     }
 }
@@ -95,24 +107,100 @@ fn handle_send_click(
     chat_view: &ChatView,
     controls: &ControlsArea,
     button: &gtk4::Button,
+    sidebar: &ConversationSidebar,
 ) -> AppResult<()> {
     // Validate input
     let text = get_input_text(text_buffer)?;
     let model = get_selected_model(controls)?;
-    
+
     // Clear input and start generation
     clear_input(text_buffer);
     set_generating_state(shared_state, controls, button, true);
-    
-    // Add user message to conversation and chat
+
+    // Ensure a conversation exists in the DB and persist the user message
+    persist_user_message(shared_state, &text, sidebar);
+
+    // Add user message to in-memory state and render in chat
     shared_state.borrow_mut().add_user_message(text.clone());
     let config = shared_state.borrow().config.clone();
     chat_view.append_message("You", &text, &config);
-    
+
     // Start streaming
-    start_streaming_task(shared_state, chat_view, controls, button, model);
-    
+    start_streaming_task(shared_state, chat_view, controls, button, model, sidebar.clone());
+
     Ok(())
+}
+
+/// Create a DB conversation on the first message, generate a title, and persist the user message.
+fn persist_user_message(shared_state: &SharedState, text: &str, sidebar: &ConversationSidebar) {
+    // Pull out what we need without holding the borrow across mutable operations.
+    let (is_new, existing_conv_id, profile_id) = {
+        let state = shared_state.borrow();
+        (
+            state.current_conversation_id.is_none(),
+            state.current_conversation_id,
+            state.active_profile.as_ref().and_then(|p| p.id),
+        )
+    };
+
+    // Create a new conversation row if this is the first message.
+    let conv_id = if is_new {
+        let new_id = {
+            let state = shared_state.borrow();
+            state.db.as_ref().and_then(|db| db.create_conversation(profile_id).ok())
+        };
+        match new_id {
+            Some(id) => {
+                shared_state.borrow_mut().current_conversation_id = Some(id);
+                id
+            }
+            None => return,
+        }
+    } else {
+        match existing_conv_id {
+            Some(id) => id,
+            None => return,
+        }
+    };
+
+    // Set title and persist the message (fresh immutable borrow, no conflict).
+    {
+        let state = shared_state.borrow();
+        if let Some(db) = state.db.as_ref() {
+            if is_new {
+                let _ = db.update_conversation_title(conv_id, &make_title(text));
+            }
+            let _ = db.add_message(conv_id, "user", text);
+        }
+    }
+
+    refresh_sidebar(shared_state, sidebar);
+}
+
+/// Generate a short conversation title from the first user message.
+fn make_title(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= 50 {
+        return trimmed.to_string();
+    }
+    // Truncate at the last word boundary before 50 chars
+    let cut = &trimmed[..50];
+    let boundary = cut.rfind(char::is_whitespace).unwrap_or(50);
+    format!("{}…", &trimmed[..boundary])
+}
+
+/// Re-read the conversation list from the DB and repopulate the sidebar.
+fn refresh_sidebar(shared_state: &SharedState, sidebar: &ConversationSidebar) {
+    let state = shared_state.borrow();
+    if let Some(db) = state.db.as_ref() {
+        if let Ok(convs) = db.list_conversations() {
+            sidebar.populate(&convs);
+        }
+    }
+    // Re-select the current conversation if there is one
+    if let Some(conv_id) = state.current_conversation_id {
+        sidebar.select_by_id(conv_id);
+    }
 }
 
 fn handle_stop_click(
@@ -178,6 +266,7 @@ fn start_streaming_task(
     controls: &ControlsArea,
     button: &gtk4::Button,
     model: String,
+    sidebar: ConversationSidebar,
 ) {
     let (content_sender, content_receiver) = async_channel::bounded::<String>(100);
     let (result_sender, result_receiver) = async_channel::bounded::<Result<String, crate::api::ApiError>>(1);
@@ -236,7 +325,8 @@ fn start_streaming_task(
         controls,
         button,
         content_receiver,
-        result_receiver
+        result_receiver,
+        sidebar,
     );
 }
 
@@ -247,6 +337,7 @@ fn setup_streaming_handlers(
     button: &gtk4::Button,
     content_receiver: async_channel::Receiver<String>,
     result_receiver: async_channel::Receiver<Result<String, crate::api::ApiError>>,
+    sidebar: ConversationSidebar,
 ) {
     // Insert styled "Assistant:" header and get a mark for streaming content
     let config = shared_state.borrow().config.clone();
@@ -273,7 +364,6 @@ fn setup_streaming_handlers(
     let controls_final = controls.clone();
     let button_final = button.clone();
     let chat_view_final = chat_view.clone();
-    
 
     spawn_future_local(async move {
         if let Ok(result) = result_receiver.recv().await {
@@ -283,22 +373,33 @@ fn setup_streaming_handlers(
                     let config = shared_state_final.borrow().config.clone();
                     chat_view_final.insert_formatted_at_mark(&response_mark, &response_text, &config);
 
-                    // Update conversation state
+                    // Persist assistant message
+                    {
+                        let state = shared_state_final.borrow();
+                        if let (Some(db), Some(conv_id)) = (state.db.as_ref(), state.current_conversation_id) {
+                            let _ = db.add_message(conv_id, "assistant", &response_text);
+                        }
+                    }
+
+                    // Update in-memory conversation state
                     shared_state_final.borrow_mut().add_assistant_message(response_text);
                     set_generating_state(&shared_state_final, &controls_final, &button_final, false);
+
+                    // Refresh sidebar so updated_at ordering stays current
+                    refresh_sidebar(&shared_state_final, &sidebar);
                 }
                 Err(e) => {
                     // Display error in response section
                     let error_message = format!("**Error:** {}", e);
                     let config = shared_state_final.borrow().config.clone();
                     chat_view_final.insert_formatted_at_mark(&response_mark, &error_message, &config);
-                    
+
                     // Update state
                     set_generating_state(&shared_state_final, &controls_final, &button_final, false);
                     controls_final.set_status(&format!("Error: {}", e));
                 }
             }
-            
+
             chat_view_final.scroll_to_bottom();
         }
     });
@@ -497,6 +598,128 @@ fn load_models(shared_state: SharedState, controls: &ControlsArea) {
             }
         }
     });
+}
+
+fn load_sidebar(shared_state: SharedState, sidebar: &ConversationSidebar) {
+    refresh_sidebar(&shared_state, sidebar);
+}
+
+fn setup_sidebar_handlers(
+    shared_state: SharedState,
+    chat_view: &ChatView,
+    controls: &ControlsArea,
+    sidebar: &ConversationSidebar,
+) {
+    // "New Chat" button — clear state and deselect sidebar row
+    sidebar.new_button.connect_clicked(clone!(
+        #[strong] shared_state,
+        #[strong] chat_view,
+        #[strong] sidebar,
+        move |_| {
+            shared_state.borrow_mut().clear_conversation();
+            chat_view.clear();
+            sidebar.deselect();
+        }
+    ));
+
+    // "Clear All" button — delete every conversation from the DB and reset UI
+    sidebar.clear_all_button.connect_clicked(clone!(
+        #[strong] shared_state,
+        #[strong] chat_view,
+        #[strong] sidebar,
+        move |_| {
+            {
+                let state = shared_state.borrow();
+                if let Some(db) = state.db.as_ref() {
+                    let _ = db.delete_all_conversations();
+                }
+            }
+            shared_state.borrow_mut().clear_conversation();
+            chat_view.clear();
+            refresh_sidebar(&shared_state, &sidebar);
+        }
+    ));
+
+    // Per-row delete button callback
+    sidebar.set_on_delete(clone!(
+        #[strong] shared_state,
+        #[strong] chat_view,
+        #[strong] sidebar,
+        move |conv_id| {
+            {
+                let state = shared_state.borrow();
+                if let Some(db) = state.db.as_ref() {
+                    let _ = db.delete_conversation(conv_id);
+                }
+            }
+            // If the deleted conversation was open, clear the chat
+            let was_open = shared_state.borrow().current_conversation_id == Some(conv_id);
+            if was_open {
+                shared_state.borrow_mut().clear_conversation();
+                chat_view.clear();
+            }
+            refresh_sidebar(&shared_state, &sidebar);
+        }
+    ));
+
+    // Conversation row clicked — load messages and replay into chat view
+    sidebar.list_box.connect_row_selected(clone!(
+        #[strong] shared_state,
+        #[strong] chat_view,
+        #[strong] controls,
+        #[strong] sidebar,
+        move |_, row| {
+            let _row = match row {
+                Some(r) => r,
+                None => return,
+            };
+
+            // Ignore if the row being selected is already the active conversation
+            // (e.g. a sidebar refresh that re-selects the current row)
+            let conv_id = match sidebar.selected_id() {
+                Some(id) => id,
+                None => return,
+            };
+            let already_open = shared_state.borrow().current_conversation_id == Some(conv_id);
+            if already_open {
+                return;
+            }
+
+            let messages = {
+                let state = shared_state.borrow();
+                state.db.as_ref()
+                    .and_then(|db| db.get_messages(conv_id).ok())
+                    .unwrap_or_default()
+            };
+
+            // Swap state
+            {
+                let mut state = shared_state.borrow_mut();
+                state.conversation.clear();
+                state.current_conversation_id = Some(conv_id);
+                for msg in &messages {
+                    match msg.role.as_str() {
+                        "user" => state.add_user_message(msg.content.clone()),
+                        "assistant" => state.add_assistant_message(msg.content.clone()),
+                        _ => {}
+                    }
+                }
+            }
+
+            // Replay into chat view
+            let config = shared_state.borrow().config.clone();
+            chat_view.clear();
+            for msg in &messages {
+                match msg.role.as_str() {
+                    "user" => chat_view.append_message("You", &msg.content, &config),
+                    "assistant" => chat_view.append_message("Assistant", &msg.content, &config),
+                    _ => {}
+                }
+            }
+            chat_view.scroll_to_bottom();
+            controls.set_status("Ready");
+        }
+    ));
 }
 
 fn runtime() -> &'static Runtime {
